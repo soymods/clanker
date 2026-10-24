@@ -9,11 +9,30 @@ import io.github.soymods.clanker.server.bot.ClankerPlayer;
 import io.github.soymods.clanker.server.brain.llm.ToolCall;
 import io.github.soymods.clanker.server.brain.llm.ToolSpec;
 import io.github.soymods.clanker.server.perception.Perception;
+import io.github.soymods.clanker.server.skills.AttackTask;
+import io.github.soymods.clanker.server.skills.CollectTask;
 import io.github.soymods.clanker.server.skills.ComeToTask;
+import io.github.soymods.clanker.server.skills.ContainerTask;
+import io.github.soymods.clanker.server.skills.CraftTask;
+import io.github.soymods.clanker.server.skills.EatTask;
 import io.github.soymods.clanker.server.skills.FollowTask;
+import io.github.soymods.clanker.server.skills.GiveTask;
 import io.github.soymods.clanker.server.skills.GoToTask;
+import io.github.soymods.clanker.server.skills.Matching;
+import io.github.soymods.clanker.server.skills.MineTask;
+import io.github.soymods.clanker.server.skills.PlaceTask;
+import io.github.soymods.clanker.server.skills.SleepTask;
+import io.github.soymods.clanker.server.skills.SmeltTask;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.Comparator;
@@ -48,7 +67,7 @@ public final class Tools {
 		register("go_to", "Walk to block coordinates.",
 				schema(prop("x", "integer", null), prop("y", "integer", null), prop("z", "integer", null)),
 				Tools::goTo);
-		register("stop", "Stop whatever you're doing (moving, following).",
+		register("stop", "Stop whatever you're doing.",
 				schema(),
 				(bot, player, args) -> bot.tasks().stop() ? "Stopped." : "You weren't doing anything.");
 		register("look_at", "Turn to look at a player.",
@@ -57,6 +76,68 @@ public final class Tools {
 		register("emote", "Do a quick physical gesture.",
 				schema(enumProp("action", "jump, crouch, stand up from crouching, or swing your arm", "jump", "crouch", "stand", "swing")),
 				Tools::emote);
+		register("explore", "Head off in a direction to see what's there.",
+				schema(optional(enumProp("direction", "Which way (default: a random one)", "north", "south", "east", "west", "random")),
+						optional(prop("distance", "integer", "How far, in blocks (default 32, max 128)"))),
+				Tools::explore);
+		register("mine", "Find blocks of a kind nearby (within " + MineTask.SEARCH_RADIUS + " blocks), walk over, break them with your best tool and pick up the drops. "
+						+ "Works for anything you can break by hand: trees/logs, stone, ores, dirt, sand, plants…",
+				schema(prop("block", "string", "Block name, e.g. \"oak_log\", \"logs\", \"stone\", \"iron_ore\", \"sand\""),
+						optional(prop("count", "integer", "How many blocks to break (default 1, max 256)"))),
+				Tools::mine);
+		register("pick_up_items", "Walk over dropped items nearby to pick them up.",
+				schema(optional(prop("item", "string", "Only this kind of item (default: everything)"))),
+				Tools::pickUp);
+		register("give_item", "Walk to a player and toss them items from your inventory.",
+				schema(prop("player", "string", "The player's name"), prop("item", "string", "Item name, e.g. \"oak_log\" or \"bread\""),
+						optional(prop("count", "integer", "How many (default: all you have)"))),
+				Tools::giveItem);
+		register("drop_item", "Drop items from your inventory where you stand.",
+				schema(prop("item", "string", "Item name"), optional(prop("count", "integer", "How many (default: all)"))),
+				Tools::dropItem);
+		register("hold_item", "Put an item from your inventory in your hand.",
+				schema(prop("item", "string", "Item name")),
+				Tools::holdItem);
+		register("equip", "Put on armor (or a shield in your offhand) from your inventory.",
+				schema(prop("item", "string", "Item name, e.g. \"iron_chestplate\"")),
+				Tools::equip);
+		register("eat", "Eat food from your inventory.",
+				schema(optional(prop("item", "string", "Which food (default: whatever you have)"))),
+				Tools::eat);
+		register("attack", "Fight a mob or player until it dies or gets away. Uses your best weapon.",
+				schema(prop("target", "string", "A player's name or a mob type, e.g. \"zombie\"; the nearest match within 24 blocks")),
+				Tools::attack);
+		register("craft", "Craft an item from your inventory. Bigger recipes need a crafting table within " + 24 + " blocks; you'll walk to it.",
+				schema(prop("item", "string", "What to make, e.g. \"oak_planks\", \"stick\", \"crafting_table\", \"stone_pickaxe\""),
+						optional(prop("count", "integer", "How many items you want (default 1)"))),
+				Tools::craft);
+		register("smelt", "Cook or smelt items in the nearest furnace, using fuel from your inventory, and collect the results.",
+				schema(prop("item", "string", "What to put in, e.g. \"raw_iron\", \"beef\", \"sand\""),
+						optional(prop("count", "integer", "How many (default: all you have, max 64)"))),
+				Tools::smelt);
+		register("open_container", "Walk to the nearest chest or barrel (or the one at given coordinates) and see what's inside.",
+				schema(optional(prop("x", "integer", null)), optional(prop("y", "integer", null)), optional(prop("z", "integer", null))),
+				(bot, player, args) -> container(bot, args, ContainerTask.Mode.LOOK));
+		register("store_items", "Put items into the nearest chest or barrel (or the one at given coordinates).",
+				schema(optional(prop("item", "string", "Which item (default: everything except tools, armor, weapons and food)")),
+						optional(prop("count", "integer", "How many (default: all)")),
+						optional(prop("x", "integer", null)), optional(prop("y", "integer", null)), optional(prop("z", "integer", null))),
+				(bot, player, args) -> container(bot, args, ContainerTask.Mode.STORE));
+		register("take_items", "Take items out of the nearest chest or barrel (or the one at given coordinates).",
+				schema(prop("item", "string", "Which item, or \"everything\""),
+						optional(prop("count", "integer", "How many (default: all)")),
+						optional(prop("x", "integer", null)), optional(prop("y", "integer", null)), optional(prop("z", "integer", null))),
+				(bot, player, args) -> container(bot, args, ContainerTask.Mode.TAKE));
+		register("place_block", "Place a block from your inventory at coordinates, or right next to you if none are given.",
+				schema(prop("item", "string", "Block item, e.g. \"cobblestone\", \"crafting_table\", \"torch\""),
+						optional(prop("x", "integer", null)), optional(prop("y", "integer", null)), optional(prop("z", "integer", null))),
+				Tools::placeBlock);
+		register("sleep", "Walk to the nearest bed and sleep in it (only works at night or during thunderstorms).",
+				schema(),
+				(bot, player, args) -> {
+					bot.tasks().start(new SleepTask());
+					return "Heading to a bed.";
+				});
 	}
 
 	private Tools() {
@@ -147,6 +228,160 @@ public final class Tools {
 			}
 		}
 		return "Done: " + action + ".";
+	}
+
+	private static String explore(ClankerBot bot, ClankerPlayer player, JsonObject args) {
+		String direction = args.has("direction") ? args.get("direction").getAsString() : "random";
+		int distance = args.has("distance") ? Math.clamp(integer(args, "distance"), 8, 128) : 32;
+		double angle = switch (direction) {
+			case "north" -> Math.PI;
+			case "south" -> 0;
+			case "east" -> -Math.PI / 2;
+			case "west" -> Math.PI / 2;
+			default -> player.getRandom().nextDouble() * Math.PI * 2;
+		};
+		int x = (int) Math.floor(player.getX() - Math.sin(angle) * distance);
+		int z = (int) Math.floor(player.getZ() + Math.cos(angle) * distance);
+		int y = player.level().getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
+		Vec3 target = new Vec3(x + 0.5, y, z + 0.5);
+		bot.tasks().start(new GoToTask(target, 3, "explore"));
+		return "Heading " + (direction.equals("random") ? Perception.direction(player.position(), target) : direction)
+				+ " toward " + Perception.coords(target) + ".";
+	}
+
+	private static String mine(ClankerBot bot, ClankerPlayer player, JsonObject args) {
+		String block = string(args, "block");
+		int count = args.has("count") ? Math.clamp(integer(args, "count"), 1, 256) : 1;
+		bot.tasks().start(new MineTask(block, Matching.block(block), count));
+		return "Started mining " + count + " " + block + ".";
+	}
+
+	private static String pickUp(ClankerBot bot, ClankerPlayer player, JsonObject args) {
+		String item = args.has("item") ? string(args, "item") : null;
+		bot.tasks().start(new CollectTask(item == null ? "items" : item, item == null ? stack -> true : Matching.item(item)));
+		return "Picking up " + (item == null ? "items" : item) + " nearby.";
+	}
+
+	private static String giveItem(ClankerBot bot, ClankerPlayer player, JsonObject args) {
+		ServerPlayer target = findPlayer(bot, string(args, "player"));
+		if (target == null) {
+			return noSuchPlayer(bot, string(args, "player"));
+		}
+		String item = string(args, "item");
+		var matcher = Matching.item(item);
+		int have = Matching.count(player.getInventory(), matcher);
+		if (have == 0) {
+			return "You have no " + item + ".";
+		}
+		int count = args.has("count") ? Math.clamp(integer(args, "count"), 1, have) : have;
+		bot.tasks().start(new GiveTask(target, item, matcher, count));
+		return "Bringing " + count + " " + item + " to " + target.getName().getString() + ".";
+	}
+
+	private static String dropItem(ClankerBot bot, ClankerPlayer player, JsonObject args) {
+		String item = string(args, "item");
+		var matcher = Matching.item(item);
+		int have = Matching.count(player.getInventory(), matcher);
+		if (have == 0) {
+			return "You have no " + item + ".";
+		}
+		int count = args.has("count") ? Math.clamp(integer(args, "count"), 1, have) : have;
+		return "Dropped " + GiveTask.give(player, matcher, count) + " " + item + ".";
+	}
+
+	private static String holdItem(ClankerBot bot, ClankerPlayer player, JsonObject args) {
+		String item = string(args, "item");
+		int slot = Matching.find(player.getInventory(), Matching.item(item));
+		if (slot < 0) {
+			return "You have no " + item + ".";
+		}
+		Matching.hold(player.getInventory(), slot);
+		return "Now holding " + Perception.itemName(player.getMainHandItem()) + ".";
+	}
+
+	private static String equip(ClankerBot bot, ClankerPlayer player, JsonObject args) {
+		String item = string(args, "item");
+		int slot = Matching.find(player.getInventory(), stack -> Matching.item(item).test(stack) && stack.has(DataComponents.EQUIPPABLE));
+		if (slot < 0) {
+			return "You have no " + item + " you can wear.";
+		}
+		ItemStack stack = player.getInventory().getItem(slot);
+		EquipmentSlot equipmentSlot = stack.get(DataComponents.EQUIPPABLE).slot();
+		ItemStack previous = player.getItemBySlot(equipmentSlot);
+		player.setItemSlot(equipmentSlot, stack.copy());
+		player.getInventory().setItem(slot, previous);
+		return "Put on " + Matching.itemId(stack) + (previous.isEmpty() ? "" : ", took off " + Matching.itemId(previous)) + ".";
+	}
+
+	private static String eat(ClankerBot bot, ClankerPlayer player, JsonObject args) {
+		String item = args.has("item") ? string(args, "item") : null;
+		int slot = Matching.find(player.getInventory(), stack -> EatTask.isFood(stack) && (item == null || Matching.item(item).test(stack)));
+		if (slot < 0) {
+			return item == null ? "You have no food." : "You have no " + item + " to eat.";
+		}
+		String label = Matching.itemId(player.getInventory().getItem(slot));
+		bot.tasks().start(new EatTask(label, slot));
+		return "Eating " + label + ".";
+	}
+
+	private static String attack(ClankerBot bot, ClankerPlayer player, JsonObject args) {
+		String name = string(args, "target");
+		ServerPlayer targetPlayer = findPlayer(bot, name);
+		Entity target = targetPlayer != null && targetPlayer.level() == player.level() && targetPlayer.distanceTo(player) < 24 ? targetPlayer : null;
+		if (target == null) {
+			List<String> words = Matching.words(name);
+			target = player.level().getEntities(player, player.getBoundingBox().inflate(24),
+							e -> e instanceof LivingEntity && e.isAlive() && !(e instanceof ClankerPlayer)
+									&& Matching.idMatches(BuiltInRegistries.ENTITY_TYPE.getKey(e.getType()).getPath(), words)).stream()
+					.min(Comparator.comparingDouble(e -> e.distanceToSqr(player)))
+					.orElse(null);
+		}
+		if (target == null) {
+			return "There's no " + name + " within 24 blocks.";
+		}
+		bot.tasks().start(new AttackTask(target));
+		return "Attacking " + Perception.entityName(target) + " (" + Perception.blocks(player.distanceTo(target)) + " away).";
+	}
+
+	private static String craft(ClankerBot bot, ClankerPlayer player, JsonObject args) {
+		String item = string(args, "item");
+		int count = args.has("count") ? Math.clamp(integer(args, "count"), 1, 256) : 1;
+		bot.tasks().start(new CraftTask(item, Matching.item(item), count));
+		return "Crafting " + count + " " + item + ".";
+	}
+
+	private static String smelt(ClankerBot bot, ClankerPlayer player, JsonObject args) {
+		String item = string(args, "item");
+		var matcher = Matching.item(item);
+		int have = Matching.count(player.getInventory(), matcher);
+		if (have == 0) {
+			return "You have no " + item + ".";
+		}
+		int count = args.has("count") ? Math.clamp(integer(args, "count"), 1, Math.min(have, 64)) : Math.min(have, 64);
+		bot.tasks().start(new SmeltTask(item, matcher, count));
+		return "Taking " + count + " " + item + " to a furnace.";
+	}
+
+	private static String container(ClankerBot bot, JsonObject args, ContainerTask.Mode mode) {
+		String item = args.has("item") ? string(args, "item") : null;
+		boolean everything = item == null || item.equalsIgnoreCase("everything") || item.equalsIgnoreCase("all");
+		int count = args.has("count") ? Math.max(1, integer(args, "count")) : Integer.MAX_VALUE;
+		bot.tasks().start(new ContainerTask(mode, optionalPos(args), everything ? null : item, everything ? null : Matching.item(item), count));
+		return "Heading to the container.";
+	}
+
+	private static String placeBlock(ClankerBot bot, ClankerPlayer player, JsonObject args) {
+		String item = string(args, "item");
+		BlockPos pos = optionalPos(args);
+		bot.tasks().start(new PlaceTask(item, Matching.item(item), pos));
+		return "Placing " + item + (pos == null ? " next to you." : " at " + Perception.coords(pos) + ".");
+	}
+
+	private static BlockPos optionalPos(JsonObject args) {
+		if (!args.has("x") || !args.has("y") || !args.has("z")) {
+			return null;
+		}
+		return new BlockPos(integer(args, "x"), integer(args, "y"), integer(args, "z"));
 	}
 
 	/** Names are unique on a normal server, but test and proxy setups can repeat them, so prefer the closest. */

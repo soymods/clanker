@@ -194,8 +194,8 @@ Files on disk:
 | Version | Scope |
 |---|---|
 | **0.1** | Fake player spawn/despawn, text chat with the LLM, perception, basic follow / go-to, in-game host settings screen (API key, provider, model). OpenAI + OpenAI-compatible providers. |
-| **0.2** | Baritone pathfinding port; mining, collecting, giving items |
-| **0.3** | Crafting, smelting, containers, combat, eating, sleeping; block/attack permissions; Anthropic provider |
+| **0.2** | Pathfinding (interim A*; Baritone port later), mining, collecting, giving/dropping items, knockback — *done* |
+| **0.3** | Crafting, smelting, containers, placing, combat, eating, sleeping, armor — *done*; block/attack permissions and Anthropic provider still to do |
 | **0.4** | Voice: Whisper STT, Piper TTS, positional audio, push-to-talk |
 | **0.5** | Full settings screens (voice, display, permissions), open mic, spend caps, memory |
 | **1.0** | Personalities, debug tools, polish, Modrinth release |

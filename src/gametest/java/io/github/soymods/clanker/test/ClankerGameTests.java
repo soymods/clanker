@@ -15,6 +15,17 @@ import io.github.soymods.clanker.server.brain.llm.LlmResponse;
 import io.github.soymods.clanker.server.brain.llm.OpenAiProvider;
 import io.github.soymods.clanker.server.brain.llm.ToolCall;
 import io.github.soymods.clanker.server.perception.Perception;
+import io.github.soymods.clanker.server.skills.AttackTask;
+import io.github.soymods.clanker.server.skills.ContainerTask;
+import io.github.soymods.clanker.server.skills.CraftTask;
+import io.github.soymods.clanker.server.skills.EatTask;
+import io.github.soymods.clanker.server.skills.GiveTask;
+import io.github.soymods.clanker.server.skills.Matching;
+import io.github.soymods.clanker.server.skills.MineTask;
+import io.github.soymods.clanker.server.skills.PlaceTask;
+import io.github.soymods.clanker.server.skills.SmeltTask;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import io.github.soymods.clanker.server.skills.ComeToTask;
 import io.github.soymods.clanker.server.skills.FollowTask;
 import io.github.soymods.clanker.server.skills.GoToTask;
@@ -36,13 +47,15 @@ import java.util.concurrent.atomic.AtomicReference;
 public class ClankerGameTests {
 	private static final String ARENA = "clanker-test:arena";
 	private static final AtomicInteger COUNTER = new AtomicInteger();
+	/** Bots keep their saved inventory by name, so each run uses fresh names. */
+	private static final String RUN_ID = "C" + Long.toString(System.currentTimeMillis() % 2_000_000_000L, 36);
 
 	/** Spawns a uniquely named bot in the arena, wired to the given fake model so nothing reaches a real API. */
 	static ClankerBot spawn(GameTestHelper helper, double x, double z, FakeProvider provider) {
 		Vec3 pos = helper.absoluteVec(new Vec3(x, 1, z));
 		try {
 			ClankerBot bot = ClankerBots.spawn(helper.getLevel().getServer(), helper.getLevel(), pos, 0, 0,
-					"Clank_t" + COUNTER.incrementAndGet());
+					RUN_ID + "_" + COUNTER.incrementAndGet());
 			bot.brain().setProviderOverride(provider);
 			return bot;
 		} catch (ClankerBots.SpawnException e) {
@@ -296,5 +309,237 @@ public class ClankerGameTests {
 		helper.assertValueEqual(response.toolCalls().getFirst().arguments(), "{\"x\":1,\"y\":2,\"z\":3}", "tool args");
 		helper.assertValueEqual(response.usage().cachedInputTokens(), 1024L, "cached tokens");
 		helper.succeed();
+	}
+
+	static ClankerBot survivalBot(GameTestHelper helper, double x, double z) {
+		ClankerBot bot = spawn(helper, x, z, FakeProvider.silent());
+		bot.player().setGameMode(GameType.SURVIVAL);
+		return bot;
+	}
+
+	static int count(ClankerBot bot, net.minecraft.world.item.Item item) {
+		return bot.player().getInventory().countItem(item);
+	}
+
+	@GameTest(structure = ARENA, maxTicks = 400)
+	public void pathsAroundWall(GameTestHelper helper) {
+		// A two-high wall too tall to jump, with a gap only at the far end.
+		for (int z = 0; z <= 12; z++) {
+			helper.setBlock(7, 1, z, Blocks.STONE);
+			helper.setBlock(7, 2, z, Blocks.STONE);
+		}
+		ClankerBot bot = spawn(helper, 2.5, 2.5, FakeProvider.silent());
+		Vec3 target = helper.absoluteVec(new Vec3(12.5, 1, 2.5));
+		bot.tasks().start(new GoToTask(target));
+		helper.startSequence()
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null && bot.player().position().distanceTo(target) < 1.5,
+						"didn't path around the wall; at " + Perception.coords(helper.relativeVec(bot.player().position()))))
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest(structure = ARENA, maxTicks = 100)
+	public void takesKnockbackFromPlayers(GameTestHelper helper) {
+		ClankerBot bot = survivalBot(helper, 8.5, 8.5);
+		ServerPlayer attacker = mockPlayer(helper, 6.5, 8.5);
+		Vec3[] before = new Vec3[1];
+		helper.startSequence()
+				.thenIdle(5)
+				.thenExecute(() -> {
+					attacker.lookAt(net.minecraft.commands.arguments.EntityAnchorArgument.Anchor.EYES, bot.player().getEyePosition());
+					before[0] = bot.player().position();
+					attacker.attack(bot.player());
+				})
+				.thenIdle(10)
+				.thenExecute(() -> {
+					double moved = bot.player().position().subtract(before[0]).horizontalDistance();
+					helper.assertTrue(moved > 0.3, "knockback moved the bot only " + moved + " blocks");
+				})
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest(structure = ARENA, maxTicks = 1200)
+	public void minesATree(GameTestHelper helper) {
+		for (int y = 1; y <= 3; y++) {
+			helper.setBlock(9, y, 9, Blocks.OAK_LOG);
+		}
+		ClankerBot bot = survivalBot(helper, 2.5, 2.5);
+		bot.tasks().start(new MineTask("logs", Matching.block("logs"), 3));
+		helper.startSequence()
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null, "still mining: " + Perception.snapshot(bot, bot.player())))
+				.thenExecute(() -> {
+					helper.assertValueEqual(count(bot, Items.OAK_LOG), 3, "oak logs in inventory");
+					helper.assertBlockNotPresent(Blocks.OAK_LOG, new BlockPos(9, 3, 9));
+				})
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest(structure = ARENA, maxTicks = 400)
+	public void craftsPlanksSticksAndATable(GameTestHelper helper) {
+		ClankerBot bot = spawn(helper, 2.5, 2.5, FakeProvider.silent());
+		bot.player().getInventory().add(new ItemStack(Items.OAK_LOG, 2));
+		bot.tasks().start(new CraftTask("oak planks", Matching.item("oak planks"), 8));
+		helper.startSequence()
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null, "still crafting planks"))
+				.thenExecute(() -> {
+					helper.assertValueEqual(count(bot, Items.OAK_PLANKS), 8, "planks");
+					bot.tasks().start(new CraftTask("crafting_table", Matching.item("crafting_table"), 1));
+				})
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null, "still crafting the table"))
+				.thenExecute(() -> {
+					helper.assertValueEqual(count(bot, Items.CRAFTING_TABLE), 1, "crafting tables");
+					bot.tasks().start(new CraftTask("sticks", Matching.item("sticks"), 4));
+				})
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null, "still crafting sticks"))
+				.thenExecute(() -> helper.assertValueEqual(count(bot, Items.STICK), 4, "sticks"))
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest(structure = ARENA, maxTicks = 400)
+	public void walksToATableForBigRecipes(GameTestHelper helper) {
+		helper.setBlock(11, 1, 11, Blocks.CRAFTING_TABLE);
+		ClankerBot bot = spawn(helper, 2.5, 2.5, FakeProvider.silent());
+		bot.player().getInventory().add(new ItemStack(Items.OAK_PLANKS, 3));
+		bot.player().getInventory().add(new ItemStack(Items.STICK, 2));
+		bot.tasks().start(new CraftTask("wooden pickaxe", Matching.item("wooden pickaxe"), 1));
+		helper.startSequence()
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null, "still crafting"))
+				.thenExecute(() -> {
+					helper.assertValueEqual(count(bot, Items.WOODEN_PICKAXE), 1, "pickaxes");
+					helper.assertTrue(bot.player().position().distanceTo(helper.absoluteVec(new Vec3(11.5, 1, 11.5))) < 5, "didn't go to the table");
+				})
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest(structure = ARENA)
+	public void craftingReportsWhatsMissing(GameTestHelper helper) {
+		ClankerBot bot = spawn(helper, 2.5, 2.5, FakeProvider.silent());
+		bot.player().getInventory().add(new ItemStack(Items.STICK, 2));
+		String[] message = new String[1];
+		var task = new CraftTask("stone pickaxe", Matching.item("stone pickaxe"), 1);
+		var result = task.tick(bot, bot.player());
+		helper.assertValueEqual(result.status(), io.github.soymods.clanker.server.skills.Task.Status.FAILED, "status");
+		helper.assertTrue(result.message().contains("missing 3 cobblestone"), "message: " + result.message());
+		finish(helper, bot);
+	}
+
+	@GameTest(structure = ARENA, maxTicks = 900)
+	public void smeltsInAFurnace(GameTestHelper helper) {
+		helper.setBlock(10, 1, 4, Blocks.FURNACE);
+		ClankerBot bot = spawn(helper, 2.5, 2.5, FakeProvider.silent());
+		bot.player().getInventory().add(new ItemStack(Items.RAW_IRON, 2));
+		bot.player().getInventory().add(new ItemStack(Items.COAL, 1));
+		bot.tasks().start(new SmeltTask("raw iron", Matching.item("raw iron"), 2));
+		helper.startSequence()
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null, "still smelting"))
+				.thenExecute(() -> helper.assertValueEqual(count(bot, Items.IRON_INGOT), 2, "iron ingots"))
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest(structure = ARENA, maxTicks = 400)
+	public void storesAndTakesFromAChest(GameTestHelper helper) {
+		helper.setBlock(9, 1, 3, Blocks.CHEST);
+		ClankerBot bot = spawn(helper, 2.5, 2.5, FakeProvider.silent());
+		bot.player().getInventory().add(new ItemStack(Items.COBBLESTONE, 20));
+		bot.player().getInventory().add(new ItemStack(Items.IRON_SWORD));
+		bot.tasks().start(new ContainerTask(ContainerTask.Mode.STORE, null, null, null, Integer.MAX_VALUE));
+		helper.startSequence()
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null, "still storing"))
+				.thenExecute(() -> {
+					helper.assertValueEqual(count(bot, Items.COBBLESTONE), 0, "cobblestone left in inventory");
+					helper.assertValueEqual(count(bot, Items.IRON_SWORD), 1, "the sword should stay");
+					bot.tasks().start(new ContainerTask(ContainerTask.Mode.TAKE, null, "cobblestone", Matching.item("cobblestone"), 5));
+				})
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null, "still taking"))
+				.thenExecute(() -> helper.assertValueEqual(count(bot, Items.COBBLESTONE), 5, "cobblestone taken back"))
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest(structure = ARENA, maxTicks = 300)
+	public void placesABlock(GameTestHelper helper) {
+		ClankerBot bot = survivalBot(helper, 2.5, 2.5);
+		bot.player().getInventory().add(new ItemStack(Items.COBBLESTONE, 4));
+		BlockPos target = helper.absolutePos(new BlockPos(8, 1, 8));
+		bot.tasks().start(new PlaceTask("cobblestone", Matching.item("cobblestone"), target));
+		helper.startSequence()
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null, "still placing"))
+				.thenExecute(() -> {
+					helper.assertBlockPresent(Blocks.COBBLESTONE, new BlockPos(8, 1, 8));
+					helper.assertValueEqual(count(bot, Items.COBBLESTONE), 3, "cobblestone left");
+				})
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest(structure = ARENA, maxTicks = 200)
+	public void eatsWhenHungry(GameTestHelper helper) {
+		ClankerBot bot = survivalBot(helper, 2.5, 2.5);
+		bot.player().getFoodData().setFoodLevel(10);
+		bot.player().getInventory().add(new ItemStack(Items.BREAD, 2));
+		bot.tasks().start(new EatTask("bread", Matching.find(bot.player().getInventory(), Matching.item("bread"))));
+		helper.startSequence()
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null, "still eating"))
+				.thenExecute(() -> {
+					helper.assertTrue(bot.player().getFoodData().getFoodLevel() > 10, "food didn't go up");
+					helper.assertValueEqual(count(bot, Items.BREAD), 1, "bread left");
+				})
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest(structure = ARENA, maxTicks = 600)
+	public void fightsAMob(GameTestHelper helper) {
+		ClankerBot bot = survivalBot(helper, 2.5, 2.5);
+		bot.player().getInventory().add(new ItemStack(Items.IRON_SWORD));
+		var pig = helper.spawn(EntityTypes.PIG, new BlockPos(10, 1, 10));
+		bot.tasks().start(new AttackTask(pig));
+		helper.startSequence()
+				.thenWaitUntil(() -> helper.assertTrue(!pig.isAlive() || pig.isDeadOrDying(), "pig still alive with " + pig.getHealth() + " health"))
+				.thenExecute(() -> helper.assertTrue(bot.player().getMainHandItem().is(Items.IRON_SWORD), "didn't use the sword"))
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest(structure = ARENA, maxTicks = 300)
+	public void givesItemsToAPlayer(GameTestHelper helper) {
+		ClankerBot bot = spawn(helper, 2.5, 2.5, FakeProvider.silent());
+		ServerPlayer player = mockPlayer(helper, 11.5, 11.5);
+		bot.player().getInventory().add(new ItemStack(Items.DIRT, 5));
+		bot.tasks().start(new GiveTask(player, "dirt", Matching.item("dirt"), 5));
+		helper.startSequence()
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null, "still giving"))
+				.thenExecute(() -> {
+					helper.assertValueEqual(count(bot, Items.DIRT), 0, "dirt left");
+					helper.assertTrue(bot.player().distanceTo(player) < 4, "didn't walk over first");
+				})
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest
+	public void namesMatchLoosely(GameTestHelper helper) {
+		helper.assertTrue(Matching.block("logs").test(Blocks.SPRUCE_LOG.defaultBlockState()), "logs -> spruce_log");
+		helper.assertTrue(Matching.block("trees").test(Blocks.OAK_LOG.defaultBlockState()), "trees -> oak_log");
+		helper.assertTrue(Matching.block("iron").test(Blocks.DEEPSLATE_IRON_ORE.defaultBlockState()), "iron -> deepslate_iron_ore");
+		helper.assertFalse(Matching.block("iron ore").test(Blocks.IRON_BLOCK.defaultBlockState()), "iron ore !-> iron_block");
+		helper.assertTrue(Matching.item("Oak Planks").test(new ItemStack(Items.OAK_PLANKS)), "Oak Planks");
+		helper.assertTrue(Matching.item("minecraft:sticks").test(new ItemStack(Items.STICK)), "minecraft:sticks");
+		helper.assertFalse(Matching.item("pickaxe").test(new ItemStack(Items.IRON_AXE)), "pickaxe !-> iron_axe");
+		helper.succeed();
+	}
+
+	@GameTest(structure = ARENA, maxTicks = 200)
+	public void failedTurnsDontPileUp(GameTestHelper helper) {
+		FakeProvider provider = new FakeProvider(request -> {
+			throw new io.github.soymods.clanker.server.brain.llm.LlmException(401, "Your API key has been invalidated.");
+		});
+		ClankerBot bot = spawn(helper, 2.5, 2.5, provider);
+		ServerPlayer player = mockPlayer(helper, 5.5, 5.5);
+		helper.startSequence()
+				.thenIdle(5)
+				.thenExecute(() -> bot.brain().hear(player, bot.name() + ", hello?", false))
+				.thenIdle(60)
+				.thenExecute(() -> {
+					helper.assertTrue(bot.brain().history().isEmpty(), "failed turn left " + bot.brain().history().size() + " messages in history");
+					helper.assertTrue(bot.brain().pending().stream().anyMatch(e -> e.text().contains("hello?")), "the question was lost instead of kept for a retry");
+					helper.assertTrue(provider.requests.size() <= 2, "retried " + provider.requests.size() + " times without backing off");
+					helper.assertTrue(bot.brain().status().contains("401"), "error not reported in status");
+				})
+				.thenExecute(() -> finish(helper, bot));
 	}
 }

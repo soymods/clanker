@@ -2,6 +2,7 @@ package io.github.soymods.clanker.server;
 
 import io.github.soymods.clanker.config.ServerConfig;
 import io.github.soymods.clanker.network.HostSettings;
+import io.github.soymods.clanker.server.bot.ClankerBots;
 import io.github.soymods.clanker.server.brain.Brain;
 import io.github.soymods.clanker.server.safety.ClankerPermissions;
 import net.minecraft.server.level.ServerPlayer;
@@ -67,6 +68,7 @@ public final class HostSettingsHandler {
 			config.apiKey = update.newApiKey.strip();
 		}
 		config.save();
+		ClankerBots.all().forEach(bot -> bot.brain().resetBackoff());
 		return renamed ? "Saved. The new name applies the next time Clanker spawns." : "Saved.";
 	}
 

@@ -9,15 +9,23 @@ public class GoToTask implements Task {
 	private static final int TIMEOUT_TICKS = 20 * 90;
 
 	private final Vec3 target;
+	private final double arriveDistance;
+	private final String name;
 	private int ticks;
 
 	public GoToTask(Vec3 target) {
+		this(target, 0.8, "go_to");
+	}
+
+	public GoToTask(Vec3 target, double arriveDistance, String name) {
 		this.target = target;
+		this.arriveDistance = arriveDistance;
+		this.name = name;
 	}
 
 	@Override
 	public String name() {
-		return "go_to";
+		return name;
 	}
 
 	@Override
@@ -27,7 +35,7 @@ public class GoToTask implements Task {
 
 	@Override
 	public Result tick(ClankerBot bot, ClankerPlayer player) {
-		bot.movement().moveTo(target, 0.8, true);
+		bot.movement().moveTo(target, arriveDistance, true);
 		if (bot.movement().hasArrived()) {
 			return Result.success("arrived at " + Perception.coords(target));
 		}

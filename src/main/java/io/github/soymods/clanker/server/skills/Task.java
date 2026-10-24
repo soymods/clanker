@@ -15,6 +15,10 @@ public interface Task {
 
 	Result tick(ClankerBot bot, ClankerPlayer player);
 
+	/** Called once when the task ends for any reason (finished, failed, replaced or stopped), to clean up. */
+	default void end(ClankerBot bot, ClankerPlayer player) {
+	}
+
 	enum Status { RUNNING, SUCCESS, FAILED }
 
 	record Result(Status status, String message) {

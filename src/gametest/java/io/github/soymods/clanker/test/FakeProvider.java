@@ -32,7 +32,11 @@ public class FakeProvider implements LlmProvider {
 	@Override
 	public CompletableFuture<LlmResponse> complete(LlmRequest request) {
 		requests.add(request);
-		return CompletableFuture.completedFuture(script.apply(request));
+		try {
+			return CompletableFuture.completedFuture(script.apply(request));
+		} catch (RuntimeException e) {
+			return CompletableFuture.failedFuture(e); // like a real HTTP failure
+		}
 	}
 
 	public boolean anyRequestContains(String text) {

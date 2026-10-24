@@ -7,6 +7,7 @@ import io.github.soymods.clanker.Clanker;
 import io.github.soymods.clanker.config.ServerConfig;
 import io.github.soymods.clanker.server.brain.BrainEvent;
 import io.github.soymods.clanker.server.perception.Perception;
+import net.fabricmc.fabric.api.entity.event.v1.EntitySleepEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -181,6 +182,14 @@ public final class ClankerBots {
 					bot.tasks().stop();
 					bot.brain().post(BrainEvent.of(BrainEvent.Type.DEATH, "You died: " + player.getCombatTracker().getDeathMessage().getString()
 							+ " at " + Perception.coords(player.position()) + "."));
+				}
+			}
+		});
+
+		EntitySleepEvents.START_SLEEPING.register((entity, pos) -> {
+			if (entity instanceof ServerPlayer sleeper && !(sleeper instanceof ClankerPlayer)) {
+				for (ClankerBot bot : BOTS.values()) {
+					bot.brain().post(BrainEvent.of(BrainEvent.Type.PLAYER_SLEEPING, sleeper.getName().getString() + " got into bed."));
 				}
 			}
 		});

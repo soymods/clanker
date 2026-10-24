@@ -2,13 +2,13 @@
 
 Play Minecraft with an AI. Clanker joins your world as a player: it sees what's around it, hears you talk, answers out loud from where it's standing, and plays alongside you — mining, crafting, fighting, building, and making its own decisions (and mistakes).
 
-> **Status:** early development (0.1.0-dev). 0.1 works: Clanker joins, sees, chats in text, follows you and walks places. Voice, mining, crafting and combat come in later versions — see [DESIGN.md](DESIGN.md).
+> **Status:** early development (0.1.0-dev). Clanker joins, sees, chats in text, finds paths, mines, picks up and gives items, crafts, smelts, uses chests, places blocks, fights, eats, sleeps and wears armor. Voice and long-term memory are next — see [DESIGN.md](DESIGN.md).
 
 ## Quick start (0.1)
 
 1. Install the mod (and Fabric API) on the server, or in your client for singleplayer/LAN.
 2. In game, press the **Open Settings** key (Controls → Clanker; unbound by default) or run `/clanker config`, paste an OpenAI API key, and save. The key stays on the host and is never sent back to clients.
-3. `/clanker spawn`, then talk to it in chat — say its name, e.g. "Clanker, follow me".
+3. `/clanker spawn`, then talk to it in chat — say its name, e.g. "Clanker, chop that tree and bring me the logs".
 
 Other commands: `/clanker despawn`, `stop`, `status`, `follow [player]`, `come`, `goto <pos>`, `forget`. Saying "stop" with its name halts it instantly, without asking the model.
 

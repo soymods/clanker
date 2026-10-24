@@ -40,6 +40,7 @@ public class Brain {
 	private static final long EVENT_COOLDOWN_MS = 4000;
 	private static final long CONVERSATION_WINDOW_MS = 30_000;
 	private static final long NOTICE_INTERVAL_MS = 60_000;
+	private static final long MAX_RETRY_DELAY_MS = 300_000;
 	private static final Pattern STOP_WORD = Pattern.compile("\\b(stop|halt|freeze)\\b", Pattern.CASE_INSENSITIVE);
 
 	private final ClankerBot bot;
@@ -56,6 +57,10 @@ public class Brain {
 	private long lastTurnEnd;
 	private long lastActivity = System.currentTimeMillis();
 	private long lastNotice;
+	private List<BrainEvent> turnEvents = List.of();
+	private int turnStartHistorySize;
+	private int errorStreak;
+	private long retryAt;
 	private String lastPhase;
 	private String lastWeather;
 
@@ -161,7 +166,7 @@ public class Brain {
 			speech |= event.type() == BrainEvent.Type.SPEECH;
 			trigger |= event.type().triggersTurn;
 		}
-		if (!trigger || now - lastTurnEnd < (speech ? SPEECH_COOLDOWN_MS : EVENT_COOLDOWN_MS)) {
+		if (!trigger || now - lastTurnEnd < (speech ? SPEECH_COOLDOWN_MS : EVENT_COOLDOWN_MS) || now < retryAt) {
 			return;
 		}
 		startTurn(self, now);
@@ -194,6 +199,8 @@ public class Brain {
 			notice(Component.literal("[Clanker] No API key is set, so " + bot.name() + " can't think yet. Add one with /clanker config."), false);
 			return;
 		}
+		turnStartHistorySize = history.size();
+		turnEvents = List.copyOf(pending);
 		history.add(ChatMessage.user(formatEvents(now), Perception.snapshot(bot, self)));
 		pending.clear();
 		trimHistory();
@@ -223,6 +230,8 @@ public class Brain {
 			return;
 		}
 		lastError = "";
+		errorStreak = 0;
+		retryAt = 0;
 		requests++;
 		inputTokens += response.usage().inputTokens();
 		outputTokens += response.usage().outputTokens();
@@ -246,6 +255,15 @@ public class Brain {
 	}
 
 	private void onError(Throwable error) {
+		if (toolRounds == 0 && history.size() > turnStartHistorySize) {
+			// Nothing happened this turn: undo it and keep its events for the retry, so failures don't pile up.
+			while (history.size() > turnStartHistorySize) {
+				history.removeLast();
+			}
+			pending.addAll(0, turnEvents);
+		}
+		errorStreak++;
+		retryAt = System.currentTimeMillis() + Math.min(MAX_RETRY_DELAY_MS, 5_000L << Math.min(errorStreak - 1, 6));
 		String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
 		int status = error instanceof LlmException llm ? llm.status() : 0;
 		lastError = (status > 0 ? status + ": " : "") + message;
@@ -313,6 +331,12 @@ public class Brain {
 			case OPENAI_COMPATIBLE -> config.endpoint.isBlank() || config.model.isBlank() ? null
 					: new OpenAiProvider(config.endpoint, key, config.model, config.reasoningEffort);
 		};
+	}
+
+	/** Try again right away, e.g. after the host changes the API key or model. */
+	public void resetBackoff() {
+		errorStreak = 0;
+		retryAt = 0;
 	}
 
 	/** Forget the conversation (not long-term memory, which arrives in 0.5). */

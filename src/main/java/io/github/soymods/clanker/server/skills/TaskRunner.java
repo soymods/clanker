@@ -20,6 +20,7 @@ public class TaskRunner {
 	}
 
 	public void start(Task task) {
+		end();
 		bot.movement().stop();
 		current = task;
 	}
@@ -27,10 +28,18 @@ public class TaskRunner {
 	/** Cancels the current task without reporting it. Returns whether anything was running. */
 	public boolean stop() {
 		boolean wasRunning = current != null;
-		current = null;
+		end();
 		bot.movement().stop();
 		bot.movement().clearLook();
 		return wasRunning;
+	}
+
+	private void end() {
+		Task task = current;
+		current = null;
+		if (task != null && bot.player() != null) {
+			task.end(bot, bot.player());
+		}
 	}
 
 	public void tick(ClankerPlayer player) {
@@ -42,7 +51,7 @@ public class TaskRunner {
 		if (result.status() == Task.Status.RUNNING || current != task) {
 			return;
 		}
-		current = null;
+		end();
 		bot.movement().stop();
 		BrainEvent.Type type = result.status() == Task.Status.SUCCESS ? BrainEvent.Type.TASK_DONE : BrainEvent.Type.TASK_FAILED;
 		String verb = result.status() == Task.Status.SUCCESS ? "finished" : "failed";

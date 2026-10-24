@@ -11,6 +11,7 @@ public record BrainEvent(Type type, String text, long timeMillis) {
 		DAMAGE(true),
 		DEATH(true),
 		RESPAWN(true),
+		PLAYER_SLEEPING(true),
 		TASK_DONE(true),
 		TASK_FAILED(true),
 		PLAYER_JOINED(true),

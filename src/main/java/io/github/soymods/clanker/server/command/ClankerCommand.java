@@ -56,6 +56,7 @@ public final class ClankerCommand {
 						.then(Commands.literal("reload").requires(ClankerPermissions::canManage)
 								.executes(context -> {
 									ServerConfig.load();
+									ClankerBots.all().forEach(bot -> bot.brain().resetBackoff());
 									context.getSource().sendSuccess(() -> Component.literal("Clanker config reloaded"), true);
 									return 1;
 								}))));

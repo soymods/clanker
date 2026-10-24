@@ -39,7 +39,8 @@ public class LiveSmokeTests {
 		helper.succeed();
 	}
 
-	// Ticks run unthrottled here, so the wait is bounded by wall-clock time instead of maxTicks.
+	// Ticks run unthrottled here, so waits are bounded by wall-clock time instead of maxTicks. Timeouts throw a plain
+	// exception because thenWaitUntil treats assertion failures as "not yet".
 	@GameTest(structure = "clanker-test:arena", maxTicks = Integer.MAX_VALUE)
 	public void liveComeHere(GameTestHelper helper) {
 		if (!LIVE) {
@@ -69,7 +70,7 @@ public class LiveSmokeTests {
 					if (System.currentTimeMillis() - start > TIMEOUT_MS) {
 						log(bot);
 						ClankerBots.despawn(bot);
-						helper.fail("no movement tool call within " + TIMEOUT_MS / 1000 + "s; " + bot.brain().status());
+						throw new IllegalStateException("no movement tool call within " + TIMEOUT_MS / 1000 + "s; " + bot.brain().status());
 					}
 					helper.assertTrue(movedForRequest(bot), "waiting for the model");
 				})
@@ -82,7 +83,7 @@ public class LiveSmokeTests {
 					if (System.currentTimeMillis() - start > TIMEOUT_MS) {
 						log(bot);
 						ClankerBots.despawn(bot);
-						helper.fail("no spoken answer within " + TIMEOUT_MS / 1000 + "s; " + bot.brain().status());
+						throw new IllegalStateException("no spoken answer within " + TIMEOUT_MS / 1000 + "s; " + bot.brain().status());
 					}
 					helper.assertTrue(bot.spokenCount() > spokenBefore.get() && !bot.brain().isThinking(), "waiting for an answer");
 				})
@@ -91,6 +92,50 @@ public class LiveSmokeTests {
 					ClankerBots.despawn(bot);
 				})
 				.thenSucceed();
+	}
+
+	@GameTest(structure = "clanker-test:arena", maxTicks = Integer.MAX_VALUE)
+	public void liveGathersWood(GameTestHelper helper) {
+		if (!LIVE) {
+			helper.succeed();
+			return;
+		}
+		for (int y = 1; y <= 4; y++) {
+			helper.setBlock(11, y, 11, net.minecraft.world.level.block.Blocks.OAK_LOG);
+		}
+		ClankerBot bot;
+		try {
+			bot = ClankerBots.spawn(helper.getLevel().getServer(), helper.getLevel(), helper.absoluteVec(new Vec3(3.5, 1, 3.5)), 0, 0, "Clanky");
+		} catch (ClankerBots.SpawnException e) {
+			throw new AssertionError(e.getMessage());
+		}
+		bot.player().setGameMode(net.minecraft.world.level.GameType.SURVIVAL);
+		ServerPlayer player = helper.makeMockServerPlayerInLevel();
+		Vec3 pos = helper.absoluteVec(new Vec3(2.5, 1, 6.5));
+		player.teleportTo(helper.getLevel(), pos.x, pos.y, pos.z, Set.of(), 0, 0, true);
+		long start = System.currentTimeMillis();
+
+		helper.startSequence()
+				.thenIdle(5)
+				.thenExecute(() -> bot.brain().hear(player, "Clanky, chop down that tree and bring me the wood", false))
+				.thenWaitUntil(() -> {
+					if (System.currentTimeMillis() - start > 180_000) {
+						log(bot);
+						ClankerBots.despawn(bot);
+						throw new IllegalStateException("didn't gather and hand over wood within 3 minutes; " + bot.brain().status());
+					}
+					helper.assertTrue(happened(bot, "Task give_item finished"), "waiting for the wood");
+				})
+				.thenExecute(() -> {
+					log(bot);
+					ClankerBots.despawn(bot);
+				})
+				.thenSucceed();
+	}
+
+	private static boolean happened(ClankerBot bot, String text) {
+		return bot.brain().history().stream().anyMatch(m -> m.content() != null && m.content().contains(text))
+				|| bot.brain().pending().stream().anyMatch(e -> e.text().contains(text));
 	}
 
 	private static boolean movedForRequest(ClankerBot bot) {

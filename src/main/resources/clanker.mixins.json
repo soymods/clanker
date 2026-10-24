@@ -4,7 +4,8 @@
 	"compatibilityLevel": "JAVA_25",
 	"mixins": [
 		"ConnectionAccessor",
-		"PlayerListMixin"
+		"PlayerListMixin",
+		"PlayerMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1
