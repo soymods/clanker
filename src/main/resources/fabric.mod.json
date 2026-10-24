@@ -1,0 +1,45 @@
+{
+	"schemaVersion": 1,
+	"id": "clanker",
+	"version": "${version}",
+	"name": "Clanker",
+	"description": "Play Minecraft with an AI. Clanker sees the world, hears you talk, answers out loud, and plays alongside you.",
+	"authors": [
+		"soymods"
+	],
+	"contributors": [
+		"Pathfinding based on Baritone by cabaletta and contributors"
+	],
+	"contact": {
+		"homepage": "https://github.com/soymods/clanker",
+		"sources": "https://github.com/soymods/clanker",
+		"issues": "https://github.com/soymods/clanker/issues"
+	},
+	"license": "GPL-3.0-or-later",
+	"icon": "assets/clanker/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"io.github.soymods.clanker.Clanker"
+		],
+		"client": [
+			"io.github.soymods.clanker.client.ClankerClient"
+		]
+	},
+	"mixins": [
+		"clanker.mixins.json",
+		{
+			"config": "clanker.client.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "~26.2",
+		"java": ">=25",
+		"fabric-api": "*"
+	},
+	"suggests": {
+		"modmenu": "*"
+	}
+}
