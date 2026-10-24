@@ -26,7 +26,7 @@ public class ClankerBot {
 	private final MinecraftServer server;
 	private final UUID id;
 	private final String name;
-	private final MovementController movement = new MovementController();
+	private final MovementController movement;
 	private final TaskRunner tasks;
 	private final Brain brain;
 	private final Memory memory;
@@ -40,6 +40,7 @@ public class ClankerBot {
 		this.server = server;
 		this.id = id;
 		this.name = name;
+		this.movement = new MovementController(this);
 		this.tasks = new TaskRunner(this);
 		this.brain = new Brain(this);
 		this.memory = Memory.load(server, name);
@@ -88,6 +89,7 @@ public class ClankerBot {
 	void setPlayer(ClankerPlayer player) {
 		this.player = player;
 		this.deadTicks = 0;
+		movement.reset();
 	}
 
 	void beforePlayerTick(ClankerPlayer player) {

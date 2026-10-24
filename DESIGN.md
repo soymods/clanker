@@ -87,8 +87,10 @@ Every skill reports `success` / `failed: <reason>` / `progress`, so the model ca
 Ported from **Baritone** (branch `26.2`, local checkout at `~/Desktop/baritone`), credited; ported files keep Baritone's notices and are used under the GPL as LGPL-3.0 §2 allows:
 
 - **Reused:** A* (`AStarPathFinder`, `BinaryHeapOpenSet`), movement types (traverse, ascend, descend, fall, diagonal, parkour, pillar, bridge, break-through), cost model (`ActionCosts`, `CalculationContext`), precomputed block safety data.
-- **Rewritten:** execution. Baritone drives the *client* player by faking key presses. Clanker implements Baritone's player/world context interface for a server-side fake player and converts path steps into rotation + movement input each tick.
-- Re-paths when the world changes; dangers (lava, long falls, mobs) are weighted in costs.
+- **Rewritten:** execution. Baritone drives the *client* player by faking key presses. Clanker's `BotContext` stands in for Baritone's player context per bot; `Inputs` turns held keys into server-side player input, and clicks go through `ServerPlayerGameMode` the way a client's packets would (survival break times, reach, spawn protection). `PathingBehavior` is Baritone's, minus processes and events; `MovementController` keeps the API tasks use, hands longer trips to it, and steers the last fraction of a block and short in-view hops directly.
+- **Threading:** searches run on a background pool. Each search gets a fresh `CalculationContext`, built on the server thread, holding a map of the chunks loaded around the bot and a copy of its inventory; the search reads only those.
+- **Permissions:** the host's "break blocks" / "place blocks" switches feed `allowBreak` / throwaway placement for every search, and the input layer refuses clicks when they are off. Spawn protection counts as protected. Containers and beds are never broken on the way somewhere.
+- Re-paths when the world changes or a movement takes too long; plans the next segment ahead; dangers (lava, long falls) are weighted in costs. Parkour is on (Baritone ships it off).
 - Ported files keep their Baritone license headers plus a note of what changed.
 
 ## 8. Voice (client-side, fully local)
@@ -196,7 +198,7 @@ Files on disk:
 | Version | Scope |
 |---|---|
 | **0.1** | Fake player spawn/despawn, text chat with the LLM, perception, basic follow / go-to, in-game host settings screen (API key, provider, model). OpenAI + OpenAI-compatible providers. |
-| **0.2** | Pathfinding (interim A*; Baritone port later), mining, collecting, giving/dropping items, knockback — *done* |
+| **0.2** | Pathfinding (Baritone port), mining, collecting, giving/dropping items, knockback — *done* |
 | **0.3** | Crafting, smelting, containers, placing, combat, eating, sleeping, armor, block/attack permissions — *done*; Anthropic provider still to do |
 | **0.4** | Voice: Whisper STT, Piper TTS, positional audio, push-to-talk — *done* |
 | **0.5** | Full settings screens (voice, display, permissions), open mic, spend caps, memory — *done* |

@@ -46,6 +46,8 @@ import java.util.concurrent.atomic.AtomicReference;
 @SuppressWarnings("removal") // makeMockServerPlayerInLevel is the only way to get a ServerPlayer in the test level
 public class ClankerGameTests {
 	private static final String ARENA = "clanker-test:arena";
+	/** Same floor, but tall enough to build and stand on towers. */
+	private static final String TALL_ARENA = "clanker-test:tall_arena";
 	private static final AtomicInteger COUNTER = new AtomicInteger();
 	/** Bots keep their saved inventory by name, so each run uses fresh names. */
 	private static final String RUN_ID = "C" + Long.toString(System.currentTimeMillis() % 2_000_000_000L, 36);
@@ -335,6 +337,145 @@ public class ClankerGameTests {
 				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null && bot.player().position().distanceTo(target) < 1.5,
 						"didn't path around the wall; at " + Perception.coords(helper.relativeVec(bot.player().position()))))
 				.thenExecute(() -> finish(helper, bot));
+	}
+
+	/** What the path executor is doing, for failure messages. */
+	static String pathState(GameTestHelper helper, ClankerBot bot) {
+		var behavior = bot.movement().pathing().getPathingBehavior();
+		var player = bot.player();
+		StringBuilder out = new StringBuilder(" [at " + Perception.coords(helper.relativeVec(player.position())) + " ground=" + player.onGround()
+				+ " sneak=" + player.isShiftKeyDown() + " yaw=" + (int) player.getYRot() + " pitch=" + (int) player.getXRot()
+				+ " hand=" + player.getMainHandItem() + " failures=" + behavior.failures() + " searching=" + behavior.getInProgress().isPresent());
+		var current = behavior.getCurrent();
+		if (current != null) {
+			var movements = current.getPath().movements();
+			int index = Math.min(current.getPosition(), movements.size() - 1);
+			var movement = movements.get(index);
+			out.append(" movement ").append(index).append("/").append(movements.size()).append(" ").append(movement.getClass().getSimpleName())
+					.append(" ").append(helper.relativePos(movement.getSrc())).append("->").append(helper.relativePos(movement.getDest()));
+		}
+		for (var input : io.github.soymods.clanker.server.pathing.util.Input.values()) {
+			if (bot.movement().pathing().getInputOverrideHandler().isInputForcedDown(input)) {
+				out.append(" ").append(input);
+			}
+		}
+		return out.append("]").toString();
+	}
+
+	static void fill(GameTestHelper helper, int x1, int y1, int z1, int x2, int y2, int z2, net.minecraft.world.level.block.Block block) {
+		for (int x = x1; x <= x2; x++) {
+			for (int y = y1; y <= y2; y++) {
+				for (int z = z1; z <= z2; z++) {
+					helper.setBlock(x, y, z, block);
+				}
+			}
+		}
+	}
+
+	@GameTest(structure = ARENA, maxTicks = 3000)
+	public void digsThroughAWall(GameTestHelper helper) {
+		// Sealed in a pocket of dirt with the target in another pocket: the only way is to dig.
+		fill(helper, 1, 1, 6, 10, 4, 10, Blocks.DIRT);
+		helper.setBlock(2, 1, 8, Blocks.AIR);
+		helper.setBlock(2, 2, 8, Blocks.AIR);
+		helper.setBlock(8, 1, 8, Blocks.AIR);
+		helper.setBlock(8, 2, 8, Blocks.AIR);
+		ClankerBot bot = survivalBot(helper, 2.5, 8.5);
+		Vec3 target = helper.absoluteVec(new Vec3(8.5, 1, 8.5));
+		bot.tasks().start(new GoToTask(target));
+		helper.startSequence()
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null && bot.player().position().distanceTo(target) < 1.5,
+						"didn't dig through; at " + Perception.coords(helper.relativeVec(bot.player().position()))))
+				.thenExecute(() -> helper.assertTrue(count(bot, Items.DIRT) > 0, "picked up none of the dirt it dug"))
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest(structure = TALL_ARENA, maxTicks = 3000)
+	public void pillarsUpOntoALedge(GameTestHelper helper) {
+		fill(helper, 10, 1, 7, 12, 3, 9, Blocks.STONE);
+		ClankerBot bot = survivalBot(helper, 4.5, 8.5);
+		bot.player().getInventory().add(new ItemStack(Items.COBBLESTONE, 16));
+		Vec3 target = helper.absoluteVec(new Vec3(11.5, 4, 8.5));
+		bot.tasks().start(new GoToTask(target));
+		helper.startSequence()
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null && bot.player().position().distanceTo(target) < 1.5,
+						"didn't get up; at " + Perception.coords(helper.relativeVec(bot.player().position()))))
+				.thenExecute(() -> helper.assertTrue(count(bot, Items.COBBLESTONE) < 16, "got up without placing anything?"))
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest(structure = TALL_ARENA, maxTicks = 3000)
+	public void crossesAGapBetweenTowers(GameTestHelper helper) {
+		fill(helper, 0, 1, 6, 4, 3, 10, Blocks.STONE);
+		fill(helper, 8, 1, 6, 12, 3, 10, Blocks.STONE);
+		ClankerBot bot = spawn(helper, 2.5, 8.5, FakeProvider.silent());
+		bot.player().setGameMode(GameType.SURVIVAL);
+		bot.player().teleportTo(helper.getLevel(), bot.player().getX(), helper.absoluteVec(new Vec3(0, 4, 0)).y, bot.player().getZ(), Set.of(), 0, 0, true);
+		bot.player().getInventory().add(new ItemStack(Items.COBBLESTONE, 16));
+		Vec3 target = helper.absoluteVec(new Vec3(10.5, 4, 8.5));
+		bot.tasks().start(new GoToTask(target));
+		helper.startSequence()
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null && bot.player().position().distanceTo(target) < 1.5,
+						"didn't cross" + pathState(helper, bot)))
+				.thenExecute(() -> helper.assertTrue(bot.player().getHealth() >= bot.player().getMaxHealth(), "got hurt: " + bot.player().getHealth()))
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest(structure = TALL_ARENA, maxTicks = 3000)
+	public void jumpsAGapWithNothingToBuildWith(GameTestHelper helper) {
+		fill(helper, 0, 1, 6, 5, 3, 10, Blocks.STONE);
+		fill(helper, 8, 1, 6, 12, 3, 10, Blocks.STONE);
+		ClankerBot bot = spawn(helper, 2.5, 8.5, FakeProvider.silent());
+		bot.player().setGameMode(GameType.SURVIVAL);
+		bot.player().teleportTo(helper.getLevel(), bot.player().getX(), helper.absoluteVec(new Vec3(0, 4, 0)).y, bot.player().getZ(), Set.of(), 0, 0, true);
+		Vec3 target = helper.absoluteVec(new Vec3(10.5, 4, 8.5));
+		bot.tasks().start(new GoToTask(target));
+		double[] lowest = {Double.MAX_VALUE};
+		helper.onEachTick(() -> lowest[0] = Math.min(lowest[0], bot.player().getY()));
+		helper.startSequence()
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null && bot.player().position().distanceTo(target) < 1.5,
+						"didn't jump the gap" + pathState(helper, bot)))
+				.thenExecute(() -> helper.assertTrue(lowest[0] > helper.absoluteVec(new Vec3(0, 3, 0)).y, "went down instead of jumping"))
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest(structure = TALL_ARENA, maxTicks = 3000)
+	public void getsDownATallTowerSafely(GameTestHelper helper) {
+		// Four blocks is one more than it will drop without water, so it has to dig or step its way down.
+		fill(helper, 6, 1, 6, 8, 4, 8, Blocks.DIRT);
+		ClankerBot bot = spawn(helper, 7.5, 7.5, FakeProvider.silent());
+		bot.player().setGameMode(GameType.SURVIVAL);
+		bot.player().teleportTo(helper.getLevel(), bot.player().getX(), helper.absoluteVec(new Vec3(0, 5, 0)).y, bot.player().getZ(), Set.of(), 0, 0, true);
+		Vec3 target = helper.absoluteVec(new Vec3(13.5, 1, 13.5));
+		bot.tasks().start(new GoToTask(target));
+		helper.startSequence()
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null && bot.player().position().distanceTo(target) < 1.5,
+						"didn't get down" + pathState(helper, bot)))
+				.thenExecute(() -> helper.assertTrue(bot.player().getHealth() >= bot.player().getMaxHealth(), "took fall damage: " + bot.player().getHealth()))
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest(structure = ARENA)
+	public void pathingRespectsHostPermissions(GameTestHelper helper) {
+		ClankerBot bot = survivalBot(helper, 2.5, 8.5);
+		bot.player().getInventory().add(new ItemStack(Items.DIRT, 8));
+		ServerConfig config = ServerConfig.get();
+		boolean breakBefore = config.canBreakBlocks;
+		boolean placeBefore = config.canPlaceBlocks;
+		// Config is shared with tests running alongside, so check and restore within this tick.
+		try {
+			config.canBreakBlocks = false;
+			config.canPlaceBlocks = false;
+			var context = new io.github.soymods.clanker.server.pathing.movement.CalculationContext(bot.movement().pathing(), true);
+			helper.assertFalse(context.allowBreak, "search may break blocks");
+			helper.assertFalse(context.hasThrowaway, "search may place blocks");
+		} finally {
+			config.canBreakBlocks = breakBefore;
+			config.canPlaceBlocks = placeBefore;
+		}
+		var context = new io.github.soymods.clanker.server.pathing.movement.CalculationContext(bot.movement().pathing(), true);
+		helper.assertTrue(context.allowBreak && context.hasThrowaway, "permissions not restored");
+		finish(helper, bot);
 	}
 
 	@GameTest(structure = ARENA, maxTicks = 100)

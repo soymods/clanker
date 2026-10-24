@@ -65,7 +65,8 @@ public final class Tools {
 		register("come_to", "Walk to where a player is right now, then stop.",
 				schema(prop("player", "string", "The player's name")),
 				Tools::comeTo);
-		register("go_to", "Walk to block coordinates.",
+		register("go_to", "Walk to block coordinates. Like any of your walking, this finds a way: around things, jumping gaps, "
+				+ "digging through and building up or across with junk blocks (dirt, cobblestone...) when the host allows breaking and placing.",
 				schema(prop("x", "integer", null), prop("y", "integer", null), prop("z", "integer", null)),
 				Tools::goTo);
 		register("stop", "Stop whatever you're doing.",

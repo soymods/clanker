@@ -1,38 +1,51 @@
 package io.github.soymods.clanker.server.pathing;
 
+import io.github.soymods.clanker.server.bot.ClankerBot;
+import io.github.soymods.clanker.server.pathing.util.Input;
 import net.minecraft.core.BlockPos;
-import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
-import java.util.List;
-
 /**
- * Turns a movement goal into per-tick player input (rotation, forward, jump, sprint). Plans a path with
- * {@link PathFinder} and walks it waypoint by waypoint, re-planning when the goal moves or progress stalls.
+ * Turns a movement goal into per-tick player input. Long trips go through the Baritone port ({@link PathingBehavior}),
+ * which can walk, sprint, jump, swim, parkour, dig through and pillar or bridge over things; the last stretch, and
+ * short hops to a target in plain view (chasing a mob, grabbing a drop), are steered directly.
  */
 public class MovementController {
-	private static final int STUCK_TICKS = 80;
-	private static final int REPATH_COOLDOWN = 10;
-	private static final double REPATH_GOAL_MOVED = 2.5;
+	/** Without any progress for this long, tasks are told movement is stuck. */
+	private static final int STUCK_TICKS = 100;
+	/** Searches that find nothing at all before giving up on pathing and walking straight at it. */
+	private static final int MAX_FAILURES = 3;
+	/** A moving goal (a player, a mob) is only handed to the path search again once it has moved this far. */
+	private static final double REPATH_GOAL_MOVED = 1.5;
+	/** Targets this close and in plain view are walked to directly. */
+	private static final double DIRECT_RANGE = 3.5;
+
+	private final BotContext pathing;
 
 	private Goal goal;
+	private Goal searchGoal;
 	private boolean sprint;
 	private Entity lookEntity;
 	private Vec3 lookPos;
 
-	private List<BlockPos> path;
-	private int index;
-	private Vec3 pathPlannedFor;
-	private int repathCooldown;
-	private boolean repathRequested;
-
 	private double bestDistance = Double.MAX_VALUE;
 	private int ticksWithoutProgress;
+	private int lastPathPosition = -1;
 	private boolean arrived;
 	private boolean jumpQueued;
+
+	public MovementController(ClankerBot bot) {
+		this.pathing = new BotContext(bot);
+	}
+
+	public BotContext pathing() {
+		return pathing;
+	}
 
 	public void moveTo(Vec3 target, double arriveDistance, boolean sprint) {
 		moveTo(Goal.near(target, arriveDistance), sprint);
@@ -53,10 +66,17 @@ public class MovementController {
 
 	public void stop() {
 		goal = null;
-		path = null;
+		searchGoal = null;
 		arrived = false;
 		ticksWithoutProgress = 0;
 		bestDistance = Double.MAX_VALUE;
+		pathing.getPathingBehavior().setGoal(null);
+	}
+
+	/** Drops any path at once, e.g. when the player entity is replaced after a respawn. */
+	public void reset() {
+		stop();
+		pathing.getPathingBehavior().forceCancel();
 	}
 
 	public void lookAt(Entity entity) {
@@ -92,17 +112,8 @@ public class MovementController {
 	}
 
 	public void apply(ServerPlayer player) {
-		player.zza = 0;
-		player.xxa = 0;
-		boolean jumpNow = jumpQueued && player.onGround();
-		if (jumpNow) {
-			jumpQueued = false;
-		}
-		player.setJumping(jumpNow);
-		if (repathCooldown > 0) {
-			repathCooldown--;
-		}
-
+		PathingBehavior behavior = pathing.getPathingBehavior();
+		boolean steerDirectly = false;
 		if (goal != null) {
 			Vec3 feet = player.position();
 			if (arrived && !goal.reached(feet, 1)) {
@@ -112,14 +123,33 @@ public class MovementController {
 				ticksWithoutProgress = 0;
 			} else if (goal.reached(feet, 0)) {
 				arrived = true;
-				path = null;
 			}
 			if (!arrived) {
-				walk(player, feet, jumpNow);
-				return;
+				steerDirectly = shouldSteerDirectly(player, behavior);
+				updateSearchGoal(behavior, steerDirectly ? null : goal);
+				trackProgress(player, behavior);
 			}
 		}
+		if (goal == null || arrived) {
+			updateSearchGoal(behavior, null);
+		}
 
+		pathing.sprintAllowed = sprint;
+		behavior.tick(player);
+		if (behavior.isPathing() || pathing.getInputOverrideHandler().inControl()) {
+			jumpQueued = false;
+			return;
+		}
+
+		boolean jumpNow = jumpQueued && player.onGround();
+		if (jumpNow) {
+			jumpQueued = false;
+		}
+		player.setJumping(jumpNow);
+		if (steerDirectly) {
+			walkStraight(player, jumpNow);
+			return;
+		}
 		player.setSprinting(false);
 		Vec3 look = lookEntity != null && lookEntity.isAlive() ? lookEntity.getEyePosition() : lookPos;
 		if (look != null) {
@@ -133,77 +163,76 @@ public class MovementController {
 		}
 	}
 
-	private void walk(ServerPlayer player, Vec3 feet, boolean jumpNow) {
-		boolean goalMoved = pathPlannedFor != null && pathPlannedFor.distanceTo(goal.center()) > REPATH_GOAL_MOVED;
-		boolean pathDone = path != null && index >= path.size();
-		if ((path == null || goalMoved || pathDone || repathRequested) && repathCooldown == 0 && player.level() instanceof ServerLevel level) {
-			path = PathFinder.find(level, BlockPos.containing(feet.x, feet.y + 0.2, feet.z), goal);
-			index = 0;
-			pathPlannedFor = goal.center();
-			repathCooldown = REPATH_COOLDOWN;
-			repathRequested = false;
+	/**
+	 * Direct steering for the last stretch (the path search works in whole blocks, the goal may not), for targets close
+	 * by in plain view, and as a fallback when the search keeps finding nothing.
+	 */
+	private boolean shouldSteerDirectly(ServerPlayer player, PathingBehavior behavior) {
+		if (behavior.isPathing() && !behavior.isSafeToCancel()) {
+			return false; // halfway through a pillar jump or a bridge; let it finish
 		}
+		BlockPos feet = pathing.playerFeet();
+		if (goal.isInGoal(feet) || behavior.failures() >= MAX_FAILURES) {
+			return true;
+		}
+		Vec3 center = goal.center();
+		Vec3 position = player.position();
+		double flat = Math.sqrt(Math.pow(center.x - position.x, 2) + Math.pow(center.z - position.z, 2));
+		if (flat > DIRECT_RANGE || Math.abs(center.y - position.y) > 0.6 || !player.onGround()) {
+			return false;
+		}
+		Vec3 from = position.add(0, 0.5, 0);
+		Vec3 to = new Vec3(center.x, position.y + 0.5, center.z);
+		return player.level().clip(new ClipContext(from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player)).getType() == HitResult.Type.MISS
+				&& !player.level().getBlockState(BlockPos.containing(center.x, position.y - 0.5, center.z)).isAir();
+	}
 
-		boolean advanced = false;
-		if (path != null) {
-			// Skip every waypoint we're already at, including ones further along (shortcuts, falling past them).
-			for (int i = path.size() - 1; i >= index; i--) {
-				if (at(feet, path.get(i))) {
-					index = i + 1;
-					advanced = true;
-					break;
-				}
+	private void updateSearchGoal(PathingBehavior behavior, Goal wanted) {
+		if (wanted == null) {
+			if (searchGoal != null) {
+				searchGoal = null;
+				behavior.setGoal(null);
 			}
+			return;
 		}
+		if (searchGoal == null || searchGoal.center().distanceTo(wanted.center()) > REPATH_GOAL_MOVED || searchGoal.radius() != wanted.radius()) {
+			searchGoal = wanted;
+			behavior.setGoal(wanted);
+		}
+	}
 
-		Vec3 aim;
-		boolean climb = false;
-		if (path != null && index < path.size()) {
-			BlockPos waypoint = path.get(index);
-			aim = Vec3.atBottomCenterOf(waypoint);
-			climb = waypoint.getY() > feet.y + 0.3;
+	private void trackProgress(ServerPlayer player, PathingBehavior behavior) {
+		double remaining = player.position().distanceTo(goal.center());
+		PathExecutor current = behavior.getCurrent();
+		int pathPosition = current == null ? -1 : current.getPosition();
+		boolean working = pathing.getInputOverrideHandler().isInputForcedDown(Input.CLICK_LEFT)
+				|| pathing.getInputOverrideHandler().isInputForcedDown(Input.CLICK_RIGHT);
+		if (remaining < bestDistance - 0.3) {
+			bestDistance = remaining;
+			ticksWithoutProgress = 0;
+		} else if (pathPosition != lastPathPosition || working) {
+			// digging, building, or moving along a path that winds away from the goal for a while
+			ticksWithoutProgress = 0;
 		} else {
-			aim = goal.center();
+			ticksWithoutProgress++;
 		}
+		lastPathPosition = pathPosition;
+	}
 
+	private void walkStraight(ServerPlayer player, boolean jumpNow) {
+		Vec3 feet = player.position();
+		Vec3 aim = goal.center();
 		double dx = aim.x - feet.x;
 		double dz = aim.z - feet.z;
 		float yaw = (float) (Mth.atan2(dz, dx) * Mth.RAD_TO_DEG) - 90f;
 		face(player, yaw, 0f);
-		player.zza = 1f;
-
-		double remaining = feet.distanceTo(goal.center());
-		boolean straight = path == null || index + 2 >= path.size() || isStraight(feet, path.get(index), path.get(index + 2));
-		player.setSprinting(sprint && remaining > 6 && straight && !climb && player.getFoodData().getFoodLevel() > 6);
-
+		double flat = Math.sqrt(dx * dx + dz * dz);
+		// ease off right at the target so it doesn't overshoot small goals like a dropped item
+		player.zza = flat < 0.5 ? 0.4f : 1f;
+		player.setSprinting(sprint && flat > 6 && player.getFoodData().getFoodLevel() > 6);
 		boolean blocked = player.horizontalCollision && player.onGround();
 		boolean swimming = player.isInWater() || player.isInLava();
-		boolean stepUp = climb && player.onGround() && Math.sqrt(dx * dx + dz * dz) < 1.6;
-		player.setJumping(blocked || swimming || stepUp || jumpNow);
-
-		if (remaining < bestDistance - 0.3) {
-			bestDistance = remaining;
-			ticksWithoutProgress = 0;
-		} else if (advanced) {
-			ticksWithoutProgress = 0;
-		} else {
-			ticksWithoutProgress++;
-			if (ticksWithoutProgress % 30 == 0) {
-				repathRequested = true;
-			}
-		}
-	}
-
-	private static boolean at(Vec3 feet, BlockPos waypoint) {
-		double dx = waypoint.getX() + 0.5 - feet.x;
-		double dz = waypoint.getZ() + 0.5 - feet.z;
-		return dx * dx + dz * dz < 0.35 * 0.35 && feet.y > waypoint.getY() - 0.5 && feet.y < waypoint.getY() + 1.2;
-	}
-
-	private static boolean isStraight(Vec3 feet, BlockPos next, BlockPos later) {
-		Vec3 a = Vec3.atBottomCenterOf(next).subtract(feet).multiply(1, 0, 1);
-		Vec3 b = Vec3.atBottomCenterOf(later).subtract(Vec3.atBottomCenterOf(next)).multiply(1, 0, 1);
-		return a.lengthSqr() < 0.01 || b.lengthSqr() < 0.01 || a.normalize().dot(b.normalize()) > 0.9;
+		player.setJumping(blocked || swimming || jumpNow);
 	}
 
 	private static void face(ServerPlayer player, float yaw, float pitch) {
