@@ -38,7 +38,7 @@ public class ServerConfig {
 	public String botName = "Clanker";
 
 	// Behavior
-	public int idleSeconds = 30;
+	public int idleSeconds = 60;
 	public ListenMode listenMode = ListenMode.NAME_ONLY;
 	public int listenRadius = 24;
 

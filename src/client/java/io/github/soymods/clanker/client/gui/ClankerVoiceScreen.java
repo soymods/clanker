@@ -92,8 +92,8 @@ public class ClankerVoiceScreen extends Screen {
 				v -> config.ttsVolume = (float) v));
 		addRenderableWidget(slider(right, top + ROW * 3, (config.ttsSpeed - 0.5) / 1.5,
 				v -> String.format(Locale.ROOT, "Speed: %.1fx", 0.5 + v * 1.5), v -> config.ttsSpeed = (float) (Math.round((0.5 + v * 1.5) * 10) / 10.0)));
-		addRenderableWidget(CycleButton.onOffBuilder(config.subtitles)
-				.create(right, top + ROW * 4, WIDTH, 20, Component.literal("Subtitles"), (b, v) -> change(() -> config.subtitles = v)));
+		addRenderableWidget(CycleButton.onOffBuilder(config.speechText)
+				.create(right, top + ROW * 4, WIDTH, 20, Component.literal("Speech as text"), (b, v) -> change(() -> config.speechText = v)));
 		addRenderableWidget(CycleButton.onOffBuilder(config.thinkingIndicator)
 				.create(right, top + ROW * 5, WIDTH, 20, Component.literal("Thinking indicator"), (b, v) -> change(() -> config.thinkingIndicator = v)));
 

@@ -42,6 +42,7 @@ public final class VoiceInput {
 	private static volatile boolean utteranceReady;
 
 	private static boolean pttWasDown;
+	private static long cutOffAt;
 	private static int transcribing;
 	private static boolean warnedSilent;
 	private static long retryOpenAt;
@@ -66,7 +67,15 @@ public final class VoiceInput {
 
 		switch (inWorld ? config.voiceMode : ClientConfig.VoiceMode.OFF) {
 			case PUSH_TO_TALK -> pushToTalk(client, config);
-			case OPEN_MIC -> openMic(client, config);
+			case OPEN_MIC -> {
+				// The push-to-talk key still cuts Clanker off; open mic itself doesn't listen while it talks.
+				boolean down = ClankerKeys.pushToTalk.isDown();
+				if (down && !pttWasDown) {
+					interrupt(client);
+				}
+				pttWasDown = down;
+				openMic(client, config);
+			}
 			case OFF -> {
 				closeMicrophone();
 				pttWasDown = false;
@@ -78,12 +87,17 @@ public final class VoiceInput {
 		}
 	}
 
+	/** How to get to the voice download, for anyone who hasn't yet. */
+	public static final String SETUP_HINT = "Voice isn't set up yet: type /clanker config, press Voice…, then Download (about 290 MB, once). "
+			+ "Then hold V to talk, and Clanker talks back out loud.";
+
 	private static void pushToTalk(Minecraft client, ClientConfig config) {
 		boolean down = ClankerKeys.pushToTalk.isDown();
 		if (down && !pttWasDown) {
 			if (!VoiceFiles.sttReady(config)) {
-				hint(client, "Voice isn't set up yet. Open Clanker's voice settings to download the speech model.");
+				hint(client, SETUP_HINT);
 			} else if (openMicrophone(client, config)) {
+				interrupt(client);
 				synchronized (lock) {
 					recording.clear();
 				}
@@ -99,6 +113,12 @@ public final class VoiceInput {
 			closeMicrophone();
 		}
 		pttWasDown = down;
+	}
+
+	private static void interrupt(Minecraft client) {
+		if (VoicePlayer.interrupt(client)) {
+			cutOffAt = System.currentTimeMillis();
+		}
 	}
 
 	private static void openMic(Minecraft client, ClientConfig config) {
@@ -237,8 +257,12 @@ public final class VoiceInput {
 		if (clean.length() > 1000) {
 			clean = clean.substring(0, 1000);
 		}
-		ClientPlayNetworking.send(new UtterancePayload(clean));
-		client.gui.hud.setOverlayMessage(Component.literal("You: " + clean), false);
+		boolean cutOff = System.currentTimeMillis() - cutOffAt < 60_000;
+		cutOffAt = 0;
+		ClientPlayNetworking.send(new UtterancePayload(clean, cutOff));
+		if (ClientConfig.get().speechText) {
+			client.gui.hud.setOverlayMessage(Component.literal("You: " + clean), false);
+		}
 	}
 
 	/**
@@ -286,7 +310,7 @@ public final class VoiceInput {
 		return previous[b.length()];
 	}
 
-	private static void hint(Minecraft client, String text) {
+	static void hint(Minecraft client, String text) {
 		client.gui.hud.getChat().addClientSystemMessage(Component.literal("[Clanker] " + text));
 	}
 

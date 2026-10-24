@@ -45,6 +45,11 @@ public class SmeltTask implements Task {
 	}
 
 	@Override
+	public int stallTicks() {
+		return 0;
+	}
+
+	@Override
 	public String describe(ClankerBot bot, ClankerPlayer player) {
 		return loaded ? "waiting on the furnace (" + collected + "/" + count + " done)" : "taking " + label + " to a furnace";
 	}

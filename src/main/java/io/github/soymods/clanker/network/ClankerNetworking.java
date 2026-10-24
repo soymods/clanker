@@ -27,7 +27,7 @@ public final class ClankerNetworking {
 				return;
 			}
 			for (ClankerBot bot : ClankerBots.all()) {
-				bot.brain().hear(context.player(), payload.text(), true);
+				bot.brain().hear(context.player(), payload.text(), true, payload.cutOff());
 			}
 		});
 

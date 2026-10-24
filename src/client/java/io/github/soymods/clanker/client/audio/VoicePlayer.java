@@ -28,14 +28,17 @@ public final class VoicePlayer {
 	}
 
 	private static final Deque<Line> queue = new ArrayDeque<>();
+	private static final Deque<String> unshown = new ArrayDeque<>();
 	private static final List<Spoken> recent = new ArrayList<>();
 	private static final Set<String> speakerNames = new LinkedHashSet<>(List.of("Clanker"));
 	private static int synthesizing;
+	private static int epoch;
 	private static Line current;
 	private static VoiceSoundInstance playing;
 	private static long quietSince;
 	private static long startedAt;
 	private static String lastError = "";
+	private static boolean setupHintShown;
 
 	private VoicePlayer() {
 	}
@@ -49,12 +52,26 @@ public final class VoicePlayer {
 		recent.add(new Spoken(text, System.currentTimeMillis()));
 
 		ClientConfig config = ClientConfig.get();
+		if (config.ttsEnabled && !VoiceFiles.ttsReady(config) && !setupHintShown) {
+			setupHintShown = true;
+			VoiceInput.hint(client, VoiceInput.SETUP_HINT);
+		}
 		if (!config.ttsEnabled || !VoiceFiles.ttsReady(config)) {
 			return;
 		}
+		if (!config.speechText) {
+			unshown.add(text);
+			while (unshown.size() > 16) {
+				unshown.poll();
+			}
+		}
 		synthesizing++;
+		int lineEpoch = epoch;
 		Synthesizer.speak(VoiceFiles.voiceId(config), config.ttsSpeed, text).whenComplete((audio, error) -> client.execute(() -> {
 			synthesizing--;
+			if (lineEpoch != epoch) {
+				return; // cut off before it was ready
+			}
 			if (error != null) {
 				lastError = error.getCause() != null ? error.getCause().getMessage() : error.getMessage();
 				Clanker.LOGGER.warn("Couldn't speak a line", error);
@@ -71,7 +88,8 @@ public final class VoicePlayer {
 			current = null;
 			quietSince = System.currentTimeMillis();
 		}
-		if (playing == null && !queue.isEmpty()) {
+		// Wait while the player is talking, instead of talking over them.
+		if (playing == null && !queue.isEmpty() && !VoiceInput.listening()) {
 			current = queue.poll();
 			playing = new VoiceSoundInstance(current.entityId(), current.audio(), ClientConfig.get().ttsVolume);
 			startedAt = System.currentTimeMillis();
@@ -93,6 +111,28 @@ public final class VoicePlayer {
 		}
 		playing = null;
 		current = null;
+	}
+
+	/**
+	 * Stops Clanker's voice because the player started talking: the current line, queued ones and any still being
+	 * synthesized. True if anything was cut off.
+	 */
+	public static boolean interrupt(Minecraft client) {
+		boolean cut = playing != null || !queue.isEmpty() || synthesizing > 0;
+		if (cut) {
+			epoch++;
+			clear(client);
+			quietSince = System.currentTimeMillis();
+		}
+		return cut;
+	}
+
+	/**
+	 * True (once) for the chat copy of a line being voiced, which stays off screen unless speech text is on. The
+	 * server sends the speech just before the chat line.
+	 */
+	public static boolean takeUnshown(String text) {
+		return unshown.remove(text);
 	}
 
 	/** Clanker is talking, or about to (counts a short tail for room echo). */

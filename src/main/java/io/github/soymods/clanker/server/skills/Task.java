@@ -15,6 +15,14 @@ public interface Task {
 
 	Result tick(ClankerBot bot, ClankerPlayer player);
 
+	/**
+	 * How long the task may go without visible progress (moving, inventory changing, its description changing) before
+	 * it's stopped as stalled, in ticks; 0 for tasks that can legitimately wait, like following someone who stands still.
+	 */
+	default int stallTicks() {
+		return 20 * 45;
+	}
+
 	/** Called once when the task ends for any reason (finished, failed, replaced or stopped), to clean up. */
 	default void end(ClankerBot bot, ClankerPlayer player) {
 	}

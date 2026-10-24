@@ -24,6 +24,11 @@ public class SleepTask implements Task {
 	}
 
 	@Override
+	public int stallTicks() {
+		return 0;
+	}
+
+	@Override
 	public String describe(ClankerBot bot, ClankerPlayer player) {
 		return "going to bed";
 	}

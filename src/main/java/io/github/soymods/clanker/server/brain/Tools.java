@@ -24,6 +24,7 @@ import io.github.soymods.clanker.server.skills.MineTask;
 import io.github.soymods.clanker.server.skills.PlaceTask;
 import io.github.soymods.clanker.server.skills.SleepTask;
 import io.github.soymods.clanker.server.skills.SmeltTask;
+import io.github.soymods.clanker.server.skills.Task;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -414,8 +415,11 @@ public final class Tools {
 	private static String placeBlock(ClankerBot bot, ClankerPlayer player, JsonObject args) {
 		String item = string(args, "item");
 		BlockPos pos = optionalPos(args);
-		bot.tasks().start(new PlaceTask(item, Matching.item(item), pos));
-		return "Placing " + item + (pos == null ? " next to you." : " at " + Perception.coords(pos) + ".");
+		Task.Result result = bot.tasks().startNow(new PlaceTask(item, Matching.item(item), pos), player);
+		if (result != null) {
+			return (result.status() == Task.Status.SUCCESS ? "Done: " : "Failed: ") + result.message() + ".";
+		}
+		return "Started placing " + item + (pos == null ? " next to you" : " at " + Perception.coords(pos)) + "; you'll get an event when it's done.";
 	}
 
 	private static BlockPos optionalPos(JsonObject args) {

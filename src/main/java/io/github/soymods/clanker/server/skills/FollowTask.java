@@ -32,6 +32,11 @@ public class FollowTask implements Task {
 	}
 
 	@Override
+	public int stallTicks() {
+		return 0;
+	}
+
+	@Override
 	public String describe(ClankerBot bot, ClankerPlayer player) {
 		ServerPlayer target = player.level().getServer().getPlayerList().getPlayer(targetId);
 		return target == null ? "following " + targetName : "following " + targetName + " (" + Perception.blocks(player.distanceTo(target)) + " away)";

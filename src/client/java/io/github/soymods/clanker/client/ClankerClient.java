@@ -13,11 +13,14 @@ import io.github.soymods.clanker.network.SignalPayload;
 import io.github.soymods.clanker.network.SpeechPayload;
 import io.github.soymods.clanker.network.ThinkingPayload;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.contents.TranslatableContents;
 
 public class ClankerClient implements ClientModInitializer {
 	@Override
@@ -29,6 +32,7 @@ public class ClankerClient implements ClientModInitializer {
 
 		ClientPlayNetworking.registerGlobalReceiver(SpeechPayload.TYPE, (payload, context) ->
 				VoicePlayer.onSpeech(payload.entityId(), payload.text()));
+		ClientReceiveMessageEvents.ALLOW_GAME.register((message, overlay) -> overlay || !isVoicedLine(message));
 		ClientPlayNetworking.registerGlobalReceiver(ThinkingPayload.TYPE, (payload, context) ->
 				ClankerHud.setThinking(payload.entityId(), payload.thinking()));
 
@@ -56,6 +60,16 @@ public class ClankerClient implements ClientModInitializer {
 			VoicePlayer.clear(client);
 			ClankerHud.clear();
 		}));
+	}
+
+	/** The chat copy of a line Clanker is saying out loud ("<Clanker> text"). */
+	private static boolean isVoicedLine(Component message) {
+		if (!(message.getContents() instanceof TranslatableContents contents) || !contents.getKey().equals("chat.type.text")
+				|| contents.getArgs().length != 2) {
+			return false;
+		}
+		Object text = contents.getArgs()[1];
+		return VoicePlayer.takeUnshown(text instanceof Component component ? component.getString() : String.valueOf(text));
 	}
 
 	private static void handleKeys(Minecraft client) {

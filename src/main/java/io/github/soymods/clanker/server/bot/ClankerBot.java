@@ -131,9 +131,10 @@ public class ClankerBot {
 		}
 		lastSpoken = clean;
 		spokenCount++;
+		// Speech first, so clients that will voice the line know to keep its chat copy off screen.
+		sendNearby(new SpeechPayload(player.getId(), clean), SpeechPayload.TYPE);
 		server.getPlayerList().broadcastSystemMessage(
 				Component.translatable("chat.type.text", player.getDisplayName(), Component.literal(clean)), false);
-		sendNearby(new SpeechPayload(player.getId(), clean), SpeechPayload.TYPE);
 		brain.onSpoke();
 	}
 

@@ -33,7 +33,7 @@ public class ClientConfig {
 	public String language = "en";
 
 	// Voice output
-	/** Speak Clanker's lines out loud (needs the voice files). Chat always shows them either way. */
+	/** Speak Clanker's lines out loud (needs the voice files). */
 	public boolean ttsEnabled = true;
 	/** A Piper voice id such as en_US-lessac-medium. Empty uses the default voice. */
 	public String ttsVoice = "";
@@ -41,7 +41,11 @@ public class ClientConfig {
 	public float ttsSpeed = 1.0f;
 
 	// Display
-	public boolean subtitles = true;
+	/**
+	 * Show speech as text too: subtitles, your own transcript, and the chat copy of lines Clanker says out loud. Off
+	 * keeps the screen clear; lines that can't be voiced still show in chat.
+	 */
+	public boolean speechText = false;
 	public boolean thinkingIndicator = true;
 	public boolean debugHud = false;
 

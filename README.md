@@ -27,7 +27,7 @@ On macOS the official launcher isn't allowed to use the microphone; Prism Launch
 - An AI-controlled player with a real inventory, health, and hunger
 - Gets around like a player, using Baritone's pathfinding: sprinting, swimming, jumping gaps, digging through walls, pillaring and bridging with junk blocks
 - Talks with you through local speech-to-text (Whisper) and positional text-to-speech (Piper)
-- Push-to-talk or open mic, subtitles, a thinking indicator, settings menus
+- Push-to-talk or open mic (talk over Clanker to cut it off), optional subtitles, a thinking indicator, settings menus
 - A notebook it writes in itself, kept per world between sessions
 - Host permissions and spend caps
 - Works in singleplayer, Open to LAN, and on dedicated servers — only the host needs an API key

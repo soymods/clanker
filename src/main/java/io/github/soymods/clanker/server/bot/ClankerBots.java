@@ -24,6 +24,7 @@ import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.CommonListenerCookie;
+import net.minecraft.server.players.NameAndId;
 import net.minecraft.util.ProblemReporter;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.level.levelgen.Heightmap;
@@ -33,6 +34,7 @@ import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.phys.Vec3;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collection;
@@ -53,6 +55,9 @@ public final class ClankerBots {
 	/** Bots that come back when the world is reopened: the configured Clanker, not test or named spawns. */
 	private static final Set<UUID> RESTORED_ON_START = ConcurrentHashMap.newKeySet();
 	private static boolean stopping;
+	/** Clanker was in the world when it was last saved and comes back when the first player joins. */
+	private static boolean restorePending;
+	private static int restoreRetryTick = -1;
 
 	private ClankerBots() {
 	}
@@ -102,7 +107,7 @@ public final class ClankerBots {
 			throw new SpawnException("A player named " + name + " is already online");
 		}
 
-		GameProfile profile = new GameProfile(UUIDUtil.createOfflinePlayerUUID(name), name);
+		GameProfile profile = new GameProfile(botId(name), name);
 		ClankerPlayer player = new ClankerPlayer(server, level, profile, ClientInformation.createDefault());
 		ClankerBot bot = new ClankerBot(server, profile.id(), name);
 		bot.setPlayer(player);
@@ -122,6 +127,12 @@ public final class ClankerBots {
 			BOTS.remove(bot.id());
 			throw e;
 		}
+		if (player.hasDisconnected() || player.isRemoved()) {
+			// Some mods' join handlers fail on a player without a client and disconnect it before it's fully in.
+			BOTS.remove(bot.id());
+			bot.brain().shutdown();
+			throw new SpawnException("another mod disconnected " + name + " while it was joining (see the log)");
+		}
 
 		bot.brain().post(BrainEvent.of(BrainEvent.Type.SPAWNED, "You just joined the world at " + Perception.coords(player.position()) + "."));
 		return bot;
@@ -138,9 +149,29 @@ public final class ClankerBots {
 		RESTORED_ON_START.remove(bot.id());
 	}
 
+	/** Where wide Steve sits in the client's list of default skins, which it picks from with the player's UUID. */
+	private static final int STEVE_SKIN_INDEX = 15;
+	private static final int DEFAULT_SKIN_COUNT = 18;
+
+	/**
+	 * A stable id for a bot name that clients show with the Steve skin (a bot has no skin of its own, so clients pick
+	 * a default skin from {@code floorMod(uuid.hashCode(), 18)}).
+	 */
+	public static UUID botId(String name) {
+		UUID id = UUIDUtil.createOfflinePlayerUUID(name);
+		for (int salt = 0; Math.floorMod(id.hashCode(), DEFAULT_SKIN_COUNT) != STEVE_SKIN_INDEX; salt++) {
+			id = UUID.nameUUIDFromBytes(("Clanker:" + name + ":" + salt).getBytes(StandardCharsets.UTF_8));
+		}
+		return id;
+	}
+
 	private static boolean loadPlayerData(ClankerPlayer player) {
 		try (ProblemReporter.ScopedCollector reporter = new ProblemReporter.ScopedCollector(player.problemPath(), Clanker.LOGGER)) {
-			Optional<ValueInput> data = player.level().getServer().getPlayerList().loadPlayerData(player.nameAndId())
+			var players = player.level().getServer().getPlayerList();
+			String name = player.getGameProfile().name();
+			// Before Clanker had a fixed skin, its save was under the plain offline-mode id for its name.
+			Optional<ValueInput> data = players.loadPlayerData(player.nameAndId())
+					.or(() -> players.loadPlayerData(new NameAndId(UUIDUtil.createOfflinePlayerUUID(name), name)))
 					.map(tag -> TagValueInput.create(reporter, player.registryAccess(), tag));
 			data.ifPresent(input -> {
 				player.load(input);
@@ -152,6 +183,10 @@ public final class ClankerBots {
 
 	public static void register() {
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
+			if (restoreRetryTick >= 0 && server.getTickCount() >= restoreRetryTick) {
+				restoreRetryTick = -1;
+				restore(server, 0);
+			}
 			for (ClankerBot bot : BOTS.values()) {
 				bot.serverTick();
 			}
@@ -206,6 +241,11 @@ public final class ClankerBots {
 		});
 
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
+			if (!(handler.player instanceof ClankerPlayer) && restorePending) {
+				// Come back once someone is here to play with, and after mods have set up for the world.
+				restorePending = false;
+				server.execute(() -> restore(server, 1));
+			}
 			if (!(handler.player instanceof ClankerPlayer)) {
 				for (ClankerBot bot : BOTS.values()) {
 					bot.brain().post(BrainEvent.of(BrainEvent.Type.PLAYER_JOINED, handler.player.getName().getString() + " joined the game."));
@@ -232,13 +272,7 @@ public final class ClankerBots {
 
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			Spend.resetSession();
-			if (readSpawnedState(server)) {
-				try {
-					spawn(server, server.overworld(), null, 0, 0);
-				} catch (SpawnException | RuntimeException e) {
-					Clanker.LOGGER.warn("Couldn't bring Clanker back: {}", e.getMessage());
-				}
-			}
+			restorePending = readSpawnedState(server);
 		});
 
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
@@ -253,7 +287,23 @@ public final class ClankerBots {
 			BOTS.clear();
 			RESTORED_ON_START.clear();
 			stopping = false;
+			restorePending = false;
+			restoreRetryTick = -1;
 		});
+	}
+
+	private static void restore(MinecraftServer server, int retriesLeft) {
+		if (!BOTS.isEmpty() || server.isStopped()) {
+			return;
+		}
+		try {
+			spawn(server, server.overworld(), null, 0, 0);
+		} catch (SpawnException | RuntimeException e) {
+			Clanker.LOGGER.warn("Couldn't bring Clanker back: {}", e.getMessage());
+			if (retriesLeft > 0) {
+				restoreRetryTick = server.getTickCount() + 40;
+			}
+		}
 	}
 
 	private static String describe(DamageSource source) {

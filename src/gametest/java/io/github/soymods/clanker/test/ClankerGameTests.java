@@ -478,6 +478,49 @@ public class ClankerGameTests {
 		finish(helper, bot);
 	}
 
+	@GameTest(structure = TALL_ARENA, maxTicks = 6000)
+	public void minesARealAcaciaTree(GameTestHelper helper) {
+		BlockPos base = new BlockPos(9, 1, 9);
+		helper.setBlock(base.below(), Blocks.GRASS_BLOCK);
+		var level = helper.getLevel();
+		var feature = level.registryAccess().lookupOrThrow(net.minecraft.core.registries.Registries.CONFIGURED_FEATURE)
+				.getOrThrow(net.minecraft.data.worldgen.features.TreeFeatures.ACACIA).value();
+		helper.assertTrue(feature.place(level, level.getChunkSource().getGenerator(), net.minecraft.util.RandomSource.create(7), helper.absolutePos(base)), "tree didn't grow");
+		ClankerBot bot = survivalBot(helper, 3.5, 3.5);
+		MineTask task = new MineTask("acacia", Matching.block("acacia"), 3);
+		bot.tasks().start(task);
+		helper.startSequence()
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null, "still mining: " + task.describe(bot, bot.player()) + pathState(helper, bot)))
+				.thenExecute(() -> helper.assertTrue(count(bot, Items.ACACIA_LOG) >= 3, "acacia logs: " + count(bot, Items.ACACIA_LOG) + pathState(helper, bot)))
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest(structure = ARENA, maxTicks = 1200)
+	public void stalledTasksEndAndAreReported(GameTestHelper helper) {
+		FakeProvider provider = FakeProvider.silent();
+		ClankerBot bot = spawn(helper, 2.5, 2.5, provider);
+		bot.tasks().start(new io.github.soymods.clanker.server.skills.Task() {
+			@Override
+			public String name() {
+				return "wait_forever";
+			}
+
+			@Override
+			public String describe(ClankerBot b, ClankerPlayer p) {
+				return "standing still";
+			}
+
+			@Override
+			public Result tick(ClankerBot b, ClankerPlayer p) {
+				return Result.RUNNING;
+			}
+		});
+		helper.startSequence()
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null, "stalled task still running"))
+				.thenExecute(() -> helper.assertTrue(knows(bot, provider, "made no progress"), "brain wasn't told"))
+				.thenExecute(() -> finish(helper, bot));
+	}
+
 	@GameTest(structure = ARENA, maxTicks = 100)
 	public void takesKnockbackFromPlayers(GameTestHelper helper) {
 		ClankerBot bot = survivalBot(helper, 8.5, 8.5);
@@ -610,6 +653,88 @@ public class ClankerGameTests {
 				.thenExecute(() -> finish(helper, bot));
 	}
 
+	@GameTest(structure = ARENA, maxTicks = 300)
+	public void placesOnTheSpotItStandsOn(GameTestHelper helper) {
+		ClankerBot bot = survivalBot(helper, 8.5, 8.5);
+		bot.player().getInventory().add(new ItemStack(Items.CRAFTING_TABLE));
+		bot.tasks().start(new PlaceTask("crafting table", Matching.item("crafting table"), helper.absolutePos(new BlockPos(8, 1, 8))));
+		helper.startSequence()
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null, "still placing"))
+				.thenExecute(() -> helper.assertBlockPresent(Blocks.CRAFTING_TABLE, new BlockPos(8, 1, 8)))
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest(structure = ARENA, maxTicks = 300)
+	public void placesInSnow(GameTestHelper helper) {
+		for (int x = 0; x < 16; x++) {
+			for (int z = 0; z < 16; z++) {
+				helper.setBlock(new BlockPos(x, 1, z), Blocks.SNOW.defaultBlockState());
+			}
+		}
+		helper.setBlock(new BlockPos(6, 1, 3), Blocks.SNOW.defaultBlockState().setValue(net.minecraft.world.level.block.SnowLayerBlock.LAYERS, 3));
+		ClankerBot bot = survivalBot(helper, 2.5, 2.5);
+		bot.player().getInventory().add(new ItemStack(Items.CRAFTING_TABLE, 3));
+		AtomicReference<String> nextTo = new AtomicReference<>();
+		helper.startSequence()
+				.thenIdle(5)
+				.thenExecute(() -> nextTo.set(Tools.execute(bot, new ToolCall("1", "place_block", "{\"item\":\"crafting_table\"}"))))
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null, "still placing next to itself"))
+				.thenExecute(() -> {
+					helper.assertTrue(nextTo.get().startsWith("Done: placed"), "next to itself: " + nextTo.get());
+					helper.assertValueEqual(count(bot, Items.CRAFTING_TABLE), 2, "tables left after placing next to itself");
+					// a single snow layer is replaced, like grass
+					bot.tasks().start(new PlaceTask("crafting table", Matching.item("crafting table"), helper.absolutePos(new BlockPos(3, 1, 6))));
+				})
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null, "still placing in thin snow"))
+				.thenExecute(() -> {
+					helper.assertBlockPresent(Blocks.CRAFTING_TABLE, new BlockPos(3, 1, 6));
+					// deeper snow can't be built into, so it goes on top
+					bot.tasks().start(new PlaceTask("crafting table", Matching.item("crafting table"), helper.absolutePos(new BlockPos(6, 1, 3))));
+				})
+				.thenWaitUntil(() -> helper.assertTrue(bot.tasks().current() == null, "still placing on deep snow"))
+				.thenExecute(() -> helper.assertBlockPresent(Blocks.CRAFTING_TABLE, new BlockPos(6, 2, 3)))
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest
+	public void botsWearTheSteveSkin(GameTestHelper helper) {
+		for (String name : List.of("Clanker", "Bolt", "Clanker2", "x")) {
+			helper.assertValueEqual(Math.floorMod(ClankerBots.botId(name).hashCode(), 18), 15, name + "'s default skin");
+			helper.assertValueEqual(ClankerBots.botId(name), ClankerBots.botId(name), name + "'s id is stable");
+		}
+		helper.succeed();
+	}
+
+	@GameTest(structure = ARENA, maxTicks = 400)
+	public void newSpeechInterruptsThinking(GameTestHelper helper) {
+		java.util.concurrent.CompletableFuture<LlmResponse> held = new java.util.concurrent.CompletableFuture<>();
+		List<LlmRequest> requests = new java.util.concurrent.CopyOnWriteArrayList<>();
+		ClankerBot bot = spawn(helper, 2.5, 2.5, FakeProvider.silent());
+		bot.brain().setProviderOverride(request -> {
+			requests.add(request);
+			return requests.size() == 1 ? held : java.util.concurrent.CompletableFuture.completedFuture(FakeProvider.reply("ok"));
+		});
+		ServerPlayer player = mockPlayer(helper, 5.5, 5.5);
+		helper.startSequence()
+				.thenExecute(() -> bot.brain().hear(player, bot.name() + ", tell me a long story", false))
+				.thenWaitUntil(() -> helper.assertTrue(bot.brain().isThinking(), "never started thinking"))
+				.thenExecute(() -> bot.brain().hear(player, bot.name() + ", actually never mind", true, true))
+				.thenWaitUntil(() -> helper.assertValueEqual(requests.size(), 2, "requests"))
+				.thenExecute(() -> {
+					String turn = requests.get(1).messages().getLast().content();
+					helper.assertTrue(turn.contains("long story") && turn.contains("never mind"), "the new turn should have both lines: " + turn);
+					helper.assertTrue(turn.contains("didn't hear the rest"), "the cut-off wasn't reported: " + turn);
+					long userTurns = requests.get(1).messages().stream().filter(m -> m.role() == ChatMessage.Role.USER).count();
+					helper.assertValueEqual(userTurns, 1L, "abandoned turn left in history");
+					// the abandoned answer arriving late is ignored
+					held.complete(FakeProvider.reply("Once upon a time"));
+				})
+				.thenIdle(5)
+				.thenExecute(() -> helper.assertFalse(bot.brain().history().stream()
+						.anyMatch(m -> m.content() != null && m.content().contains("Once upon")), "late answer was used"))
+				.thenExecute(() -> finish(helper, bot));
+	}
+
 	@GameTest(structure = ARENA, maxTicks = 200)
 	public void eatsWhenHungry(GameTestHelper helper) {
 		ClankerBot bot = survivalBot(helper, 2.5, 2.5);
@@ -658,6 +783,10 @@ public class ClankerGameTests {
 		helper.assertTrue(Matching.block("trees").test(Blocks.OAK_LOG.defaultBlockState()), "trees -> oak_log");
 		helper.assertTrue(Matching.block("iron").test(Blocks.DEEPSLATE_IRON_ORE.defaultBlockState()), "iron -> deepslate_iron_ore");
 		helper.assertFalse(Matching.block("iron ore").test(Blocks.IRON_BLOCK.defaultBlockState()), "iron ore !-> iron_block");
+		helper.assertTrue(Matching.block("acacia").test(Blocks.ACACIA_LOG.defaultBlockState()), "acacia -> acacia_log");
+		helper.assertFalse(Matching.block("acacia").test(Blocks.ACACIA_LEAVES.defaultBlockState()), "acacia !-> acacia_leaves");
+		helper.assertTrue(Matching.block("dark oak tree").test(Blocks.DARK_OAK_LOG.defaultBlockState()), "dark oak tree -> dark_oak_log");
+		helper.assertTrue(Matching.block("acacia leaves").test(Blocks.ACACIA_LEAVES.defaultBlockState()), "acacia leaves");
 		helper.assertTrue(Matching.item("Oak Planks").test(new ItemStack(Items.OAK_PLANKS)), "Oak Planks");
 		helper.assertTrue(Matching.item("minecraft:sticks").test(new ItemStack(Items.STICK)), "minecraft:sticks");
 		helper.assertFalse(Matching.item("pickaxe").test(new ItemStack(Items.IRON_AXE)), "pickaxe !-> iron_axe");

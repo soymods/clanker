@@ -49,7 +49,18 @@ public final class Matching {
 		if (words.size() == 1 && WOOD_WORDS.contains(words.getFirst())) {
 			return state -> state.is(BlockTags.LOGS);
 		}
+		// A wood type, alone or with "tree"/"log"/"wood" ("acacia", "dark oak tree"), means its logs rather than
+		// every block with that name (leaves, planks, saplings...).
+		List<String> type = words.stream().filter(w -> !WOOD_WORDS.contains(w)).toList();
+		if (!type.isEmpty() && isWoodType(String.join("_", type))) {
+			return state -> state.is(BlockTags.LOGS) && idMatches(BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath(), type);
+		}
 		return state -> idMatches(BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath(), words);
+	}
+
+	private static boolean isWoodType(String type) {
+		return BuiltInRegistries.BLOCK.containsKey(net.minecraft.resources.Identifier.withDefaultNamespace(type + "_log"))
+				|| BuiltInRegistries.BLOCK.containsKey(net.minecraft.resources.Identifier.withDefaultNamespace(type + "_stem"));
 	}
 
 	public static Predicate<ItemStack> item(String query) {

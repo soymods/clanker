@@ -102,20 +102,54 @@ public class Brain {
 
 	/** A player said something, typed or spoken. */
 	public void hear(ServerPlayer speaker, String text, boolean voice) {
+		hear(speaker, text, voice, false);
+	}
+
+	/**
+	 * A player said something, typed or spoken. {@code cutOff} means they started talking while Clanker's voice was
+	 * still playing for them, and their client stopped it.
+	 */
+	public void hear(ServerPlayer speaker, String text, boolean voice, boolean cutOff) {
 		if (shutdown || text.isBlank()) {
 			return;
 		}
 		long now = System.currentTimeMillis();
 		String who = speaker.getName().getString();
 		boolean addressed = isAddressed(speaker, text, now);
+		if (addressed) {
+			// Being spoken to mid-thought: drop the request and think again with everything that's been said.
+			abandonRequest();
+		}
 		// Stopping never waits for the model.
 		if (addressed && STOP_WORD.matcher(text).find() && bot.tasks().stop()) {
 			post(BrainEvent.of(BrainEvent.Type.NOTE, "Your current task was cancelled because " + who + " said stop."));
+		}
+		if (cutOff) {
+			post(BrainEvent.of(BrainEvent.Type.NOTE, who + " started talking while you were still speaking, so they didn't hear the rest of what you said."));
 		}
 		post(BrainEvent.of(addressed ? BrainEvent.Type.SPEECH : BrainEvent.Type.OVERHEARD,
 				who + (voice ? " said (voice): \"" : " said: \"") + text.strip() + "\""));
 		if (addressed) {
 			conversation.put(speaker.getUUID(), now);
+		}
+	}
+
+	private void abandonRequest() {
+		if (!inFlight) {
+			return;
+		}
+		generation++;
+		inFlight = false;
+		undoEmptyTurn();
+	}
+
+	/** If the turn hasn't done anything yet, takes it back out of the history and keeps its events for the next one. */
+	private void undoEmptyTurn() {
+		if (toolRounds == 0 && history.size() > turnStartHistorySize) {
+			while (history.size() > turnStartHistorySize) {
+				history.removeLast();
+			}
+			pending.addAll(0, turnEvents);
 		}
 	}
 
@@ -231,6 +265,8 @@ public class Brain {
 		provider.complete(request).whenComplete((response, error) -> bot.server().execute(() -> {
 			if (requestGeneration == generation) {
 				onResponse(provider, response, error);
+			} else if (response != null) {
+				recordUsage(response); // abandoned, but still paid for
 			}
 		}));
 	}
@@ -247,15 +283,7 @@ public class Brain {
 		lastError = "";
 		errorStreak = 0;
 		retryAt = 0;
-		requests++;
-		inputTokens += response.usage().inputTokens();
-		outputTokens += response.usage().outputTokens();
-		cachedTokens += response.usage().cachedInputTokens();
-		if (providerOverride == null) {
-			double usd = Spend.cost(Spend.price(ServerConfig.get(), currentModel()), response.usage());
-			spent += usd;
-			Spend.record(usd);
-		}
+		recordUsage(response);
 
 		history.add(ChatMessage.assistant(response.text(), response.toolCalls()));
 		if (!response.text().isBlank()) {
@@ -266,7 +294,7 @@ public class Brain {
 		}
 		for (ToolCall call : response.toolCalls()) {
 			String result = Tools.execute(bot, call);
-			Clanker.LOGGER.debug("{} {} -> {}", call.name(), call.arguments(), result);
+			Clanker.LOGGER.info("{} used {} {} -> {}", bot.name(), call.name(), call.arguments(), abbreviate(result));
 			history.add(ChatMessage.toolResult(call.id(), result));
 		}
 		if (++toolRounds < MAX_TOOL_ROUNDS && !shutdown) {
@@ -274,14 +302,26 @@ public class Brain {
 		}
 	}
 
-	private void onError(Throwable error) {
-		if (toolRounds == 0 && history.size() > turnStartHistorySize) {
-			// Nothing happened this turn: undo it and keep its events for the retry, so failures don't pile up.
-			while (history.size() > turnStartHistorySize) {
-				history.removeLast();
-			}
-			pending.addAll(0, turnEvents);
+	private void recordUsage(LlmResponse response) {
+		requests++;
+		inputTokens += response.usage().inputTokens();
+		outputTokens += response.usage().outputTokens();
+		cachedTokens += response.usage().cachedInputTokens();
+		if (providerOverride == null) {
+			double usd = Spend.cost(Spend.price(ServerConfig.get(), currentModel()), response.usage());
+			spent += usd;
+			Spend.record(usd);
 		}
+	}
+
+	private static String abbreviate(String text) {
+		String line = text.replace('\n', ' ');
+		return line.length() > 200 ? line.substring(0, 200) + "…" : line;
+	}
+
+	private void onError(Throwable error) {
+		// Keep the events for the retry, so failures don't pile up.
+		undoEmptyTurn();
 		errorStreak++;
 		retryAt = System.currentTimeMillis() + Math.min(MAX_RETRY_DELAY_MS, 5_000L << Math.min(errorStreak - 1, 6));
 		String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();

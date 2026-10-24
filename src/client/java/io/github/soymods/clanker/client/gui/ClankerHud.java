@@ -55,7 +55,7 @@ public final class ClankerHud {
 		int y = graphics.guiHeight() - 72;
 
 		VoicePlayer.Line line = VoicePlayer.current();
-		if (config.subtitles && line != null) {
+		if (config.speechText && line != null) {
 			List<FormattedCharSequence> rows = font.split(Component.literal(line.speaker() + ": " + line.text()), Math.min(320, width - 40));
 			int start = y - rows.size() * 10;
 			for (int i = 0; i < rows.size(); i++) {
