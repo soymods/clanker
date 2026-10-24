@@ -176,7 +176,8 @@ public class MineTask implements Task {
 						continue;
 					}
 					BlockState state = level.getBlockState(pos);
-					if (!matcher.test(state) || state.getDestroySpeed(level, pos) < 0 || !exposed(level, pos)) {
+					// mayInteract covers spawn protection and the world border, same as for a real player
+					if (!matcher.test(state) || state.getDestroySpeed(level, pos) < 0 || !exposed(level, pos) || !level.mayInteract(player, pos)) {
 						continue;
 					}
 					if (state.requiresCorrectToolForDrops() && !hasToolFor(player.getInventory(), state)) {

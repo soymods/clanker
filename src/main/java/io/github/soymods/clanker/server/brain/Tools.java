@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import io.github.soymods.clanker.config.ServerConfig;
 import io.github.soymods.clanker.server.bot.ClankerBot;
 import io.github.soymods.clanker.server.bot.ClankerPlayer;
 import io.github.soymods.clanker.server.brain.llm.ToolCall;
@@ -132,6 +133,12 @@ public final class Tools {
 				schema(prop("item", "string", "Block item, e.g. \"cobblestone\", \"crafting_table\", \"torch\""),
 						optional(prop("x", "integer", null)), optional(prop("y", "integer", null)), optional(prop("z", "integer", null))),
 				Tools::placeBlock);
+		register("remember", "Write a note in your notebook so you remember it in later sessions: places, things about people, plans, anything.",
+				schema(prop("note", "string", "What to remember, in a sentence, with coordinates if it's about a place")),
+				Tools::remember);
+		register("forget_note", "Cross out a note in your notebook that's wrong or no longer matters.",
+				schema(prop("id", "integer", "The note's number")),
+				(bot, player, args) -> bot.memory().remove(integer(args, "id")) ? "Crossed out note #" + integer(args, "id") + "." : "There's no note #" + integer(args, "id") + ".");
 		register("sleep", "Walk to the nearest bed and sleep in it (only works at night or during thunderstorms).",
 				schema(),
 				(bot, player, args) -> {
@@ -143,14 +150,33 @@ public final class Tools {
 	private Tools() {
 	}
 
+	/** All tools, including ones the host has turned off (for tests and docs). */
 	public static List<ToolSpec> specs() {
 		return TOOLS.values().stream().map(Tool::spec).toList();
+	}
+
+	/** The tools the host allows. Turned-off tools aren't offered at all. */
+	public static List<ToolSpec> specs(ServerConfig config) {
+		return TOOLS.values().stream().map(Tool::spec).filter(spec -> allowed(config, spec.name())).toList();
+	}
+
+	static boolean allowed(ServerConfig config, String tool) {
+		return switch (tool) {
+			case "mine" -> config.canBreakBlocks;
+			case "place_block" -> config.canPlaceBlocks;
+			case "attack" -> config.canAttackMobs || config.canAttackPlayers;
+			case "open_container", "store_items", "take_items" -> config.canUseContainers;
+			default -> true;
+		};
 	}
 
 	public static String execute(ClankerBot bot, ToolCall call) {
 		Tool tool = TOOLS.get(call.name());
 		if (tool == null) {
 			return "Error: there is no tool named " + call.name() + ".";
+		}
+		if (!allowed(ServerConfig.get(), call.name())) {
+			return "Error: the host has turned off " + call.name() + ".";
 		}
 		ClankerPlayer player = bot.player();
 		if (player == null || player.isDeadOrDying()) {
@@ -249,6 +275,13 @@ public final class Tools {
 				+ " toward " + Perception.coords(target) + ".";
 	}
 
+	private static String remember(ClankerBot bot, ClankerPlayer player, JsonObject args) {
+		String note = string(args, "note");
+		String when = "day " + (player.level().getOverworldClockTime() / 24000 + 1);
+		int id = bot.memory().add(note, when);
+		return "Wrote note #" + id + ".";
+	}
+
 	private static String mine(ClankerBot bot, ClankerPlayer player, JsonObject args) {
 		String block = string(args, "block");
 		int count = args.has("count") ? Math.clamp(integer(args, "count"), 1, 256) : 1;
@@ -326,12 +359,19 @@ public final class Tools {
 
 	private static String attack(ClankerBot bot, ClankerPlayer player, JsonObject args) {
 		String name = string(args, "target");
+		ServerConfig config = ServerConfig.get();
 		ServerPlayer targetPlayer = findPlayer(bot, name);
 		Entity target = targetPlayer != null && targetPlayer.level() == player.level() && targetPlayer.distanceTo(player) < 24 ? targetPlayer : null;
+		if (target != null && !config.canAttackPlayers) {
+			return "The host doesn't allow you to attack players.";
+		}
+		if (target == null && !config.canAttackMobs) {
+			return "The host doesn't allow you to attack mobs.";
+		}
 		if (target == null) {
 			List<String> words = Matching.words(name);
 			target = player.level().getEntities(player, player.getBoundingBox().inflate(24),
-							e -> e instanceof LivingEntity && e.isAlive() && !(e instanceof ClankerPlayer)
+							e -> e instanceof LivingEntity && e.isAlive() && !(e instanceof ClankerPlayer) && !(e instanceof ServerPlayer)
 									&& Matching.idMatches(BuiltInRegistries.ENTITY_TYPE.getKey(e.getType()).getPath(), words)).stream()
 					.min(Comparator.comparingDouble(e -> e.distanceToSqr(player)))
 					.orElse(null);

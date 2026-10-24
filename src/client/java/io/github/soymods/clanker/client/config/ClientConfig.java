@@ -29,9 +29,13 @@ public class ClientConfig {
 	/** 0..1, how loud speech must be before open mic starts listening. */
 	public float openMicSensitivity = 0.5f;
 	public WhisperModel whisperModel = WhisperModel.BASE;
+	/** Whisper language code ("en", "de", …) or "auto". English uses the smaller English-only models. */
 	public String language = "en";
 
 	// Voice output
+	/** Speak Clanker's lines out loud (needs the voice files). Chat always shows them either way. */
+	public boolean ttsEnabled = true;
+	/** A Piper voice id such as en_US-lessac-medium. Empty uses the default voice. */
 	public String ttsVoice = "";
 	public float ttsVolume = 1.0f;
 	public float ttsSpeed = 1.0f;

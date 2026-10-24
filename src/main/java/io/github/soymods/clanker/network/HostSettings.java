@@ -17,6 +17,13 @@ public class HostSettings {
 	public String personality = "";
 	public String listenMode = "";
 	public int idleSeconds;
+	public boolean canBreakBlocks;
+	public boolean canPlaceBlocks;
+	public boolean canAttackMobs;
+	public boolean canAttackPlayers;
+	public boolean canUseContainers;
+	public double sessionSpendCap;
+	public double dailySpendCap;
 
 	// Server to client
 	public boolean canEdit;
@@ -24,6 +31,9 @@ public class HostSettings {
 	public String keySource = "";
 	public String defaultModel = "";
 	public String status = "";
+	public double spentSession;
+	public double spentToday;
+	public boolean priceKnown = true;
 
 	// Client to server
 	public String newApiKey = "";

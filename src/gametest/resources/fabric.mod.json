@@ -10,7 +10,8 @@
 			"io.github.soymods.clanker.test.LiveSmokeTests"
 		],
 		"fabric-client-gametest": [
-			"io.github.soymods.clanker.test.ClankerClientGameTests"
+			"io.github.soymods.clanker.test.ClankerClientGameTests",
+			"io.github.soymods.clanker.test.ClankerVoiceGameTests"
 		]
 	},
 	"depends": {

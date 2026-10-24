@@ -1,11 +1,14 @@
 package io.github.soymods.clanker.server.bot;
 
 import io.github.soymods.clanker.network.SpeechPayload;
+import io.github.soymods.clanker.network.ThinkingPayload;
 import io.github.soymods.clanker.server.brain.Brain;
+import io.github.soymods.clanker.server.brain.Memory;
 import io.github.soymods.clanker.server.pathing.MovementController;
 import io.github.soymods.clanker.server.skills.TaskRunner;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.network.protocol.game.ServerboundClientCommandPacket;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
@@ -26,10 +29,12 @@ public class ClankerBot {
 	private final MovementController movement = new MovementController();
 	private final TaskRunner tasks;
 	private final Brain brain;
+	private final Memory memory;
 	private ClankerPlayer player;
 	private int deadTicks;
 	private String lastSpoken = "";
 	private int spokenCount;
+	private boolean thinkingShown;
 
 	ClankerBot(MinecraftServer server, UUID id, String name) {
 		this.server = server;
@@ -37,6 +42,7 @@ public class ClankerBot {
 		this.name = name;
 		this.tasks = new TaskRunner(this);
 		this.brain = new Brain(this);
+		this.memory = Memory.load(server, name);
 	}
 
 	public MinecraftServer server() {
@@ -53,6 +59,10 @@ public class ClankerBot {
 
 	public ClankerPlayer player() {
 		return player;
+	}
+
+	public Memory memory() {
+		return memory;
 	}
 
 	public MovementController movement() {
@@ -100,6 +110,10 @@ public class ClankerBot {
 			deadTicks = 0;
 		}
 		brain.tick();
+		if (brain.isThinking() != thinkingShown) {
+			thinkingShown = !thinkingShown;
+			sendNearby(new ThinkingPayload(player.getId(), thinkingShown), ThinkingPayload.TYPE);
+		}
 	}
 
 	/**
@@ -117,14 +131,18 @@ public class ClankerBot {
 		spokenCount++;
 		server.getPlayerList().broadcastSystemMessage(
 				Component.translatable("chat.type.text", player.getDisplayName(), Component.literal(clean)), false);
-		SpeechPayload payload = new SpeechPayload(player.getId(), clean);
+		sendNearby(new SpeechPayload(player.getId(), clean), SpeechPayload.TYPE);
+		brain.onSpoke();
+	}
+
+	/** Sends a payload to players near Clanker who have the mod. */
+	private void sendNearby(CustomPacketPayload payload, CustomPacketPayload.Type<?> type) {
 		for (ServerPlayer listener : server.getPlayerList().getPlayers()) {
 			if (listener != player && listener.level() == player.level()
 					&& listener.distanceTo(player) <= SPEECH_RANGE
-					&& ServerPlayNetworking.canSend(listener, SpeechPayload.TYPE)) {
+					&& ServerPlayNetworking.canSend(listener, type)) {
 				ServerPlayNetworking.send(listener, payload);
 			}
 		}
-		brain.onSpoke();
 	}
 }

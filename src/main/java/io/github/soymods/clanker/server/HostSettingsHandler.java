@@ -4,6 +4,7 @@ import io.github.soymods.clanker.config.ServerConfig;
 import io.github.soymods.clanker.network.HostSettings;
 import io.github.soymods.clanker.server.bot.ClankerBots;
 import io.github.soymods.clanker.server.brain.Brain;
+import io.github.soymods.clanker.server.brain.Spend;
 import io.github.soymods.clanker.server.safety.ClankerPermissions;
 import net.minecraft.server.level.ServerPlayer;
 
@@ -31,6 +32,17 @@ public final class HostSettingsHandler {
 		settings.personality = config.personality;
 		settings.listenMode = config.listenMode.name();
 		settings.idleSeconds = config.idleSeconds;
+		settings.canBreakBlocks = config.canBreakBlocks;
+		settings.canPlaceBlocks = config.canPlaceBlocks;
+		settings.canAttackMobs = config.canAttackMobs;
+		settings.canAttackPlayers = config.canAttackPlayers;
+		settings.canUseContainers = config.canUseContainers;
+		settings.sessionSpendCap = config.sessionSpendCap;
+		settings.dailySpendCap = config.dailySpendCap;
+		settings.spentSession = Spend.session();
+		settings.spentToday = Spend.today();
+		String model = config.model.isBlank() && config.provider == ServerConfig.Provider.OPENAI ? Brain.DEFAULT_OPENAI_MODEL : config.model;
+		settings.priceKnown = Spend.isKnown(config, model);
 		settings.canEdit = ClankerPermissions.canManage(player);
 		settings.keySet = !config.resolveApiKey().isBlank();
 		settings.keySource = config.apiKeySource();
@@ -62,6 +74,13 @@ public final class HostSettingsHandler {
 		config.reasoningEffort = clean(update.reasoningEffort);
 		config.personality = clean(update.personality);
 		config.idleSeconds = Math.max(0, Math.min(3600, update.idleSeconds));
+		config.canBreakBlocks = update.canBreakBlocks;
+		config.canPlaceBlocks = update.canPlaceBlocks;
+		config.canAttackMobs = update.canAttackMobs;
+		config.canAttackPlayers = update.canAttackPlayers;
+		config.canUseContainers = update.canUseContainers;
+		config.sessionSpendCap = Math.max(0, Math.min(1000, update.sessionSpendCap));
+		config.dailySpendCap = Math.max(0, Math.min(1000, update.dailySpendCap));
 		if (update.clearApiKey) {
 			config.apiKey = "";
 		} else if (update.newApiKey != null && !update.newApiKey.isBlank()) {

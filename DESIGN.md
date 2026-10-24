@@ -60,9 +60,10 @@ Raw block dumps are never sent.
   - An event occurs (damage, task finished/failed, time-of-day change, player joins/leaves, item received…)
   - Idle heartbeat (configurable interval), so it can act or speak unprompted if it wants
 - **Async:** all HTTP runs off the server thread; results are queued back and applied on the next tick.
-- **Memory** (per world, `<world>/clanker/memory.json`):
-  - Short-term: recent conversation + rolling summary
-  - Long-term: named places, facts about players, ongoing goals, last death location — written by the model through a `remember` tool, not by hardcoded rules
+- **Memory** (per world, `<world>/clanker/memory-<name>.json`):
+  - Short-term: recent conversation (a rolling summary is still to do)
+  - Long-term: a notebook of up to 150 short notes — places, facts about players, goals, whatever it wants — written and crossed out by the model through `remember` / `forget_note`, never by hardcoded rules. The notebook is in every prompt, newest first. `/clanker memory` shows it.
+- **Spend caps:** each response's token usage is priced (built-in table for OpenAI models, custom price in config, local endpoints free) and added to session and daily totals; at a cap the brain stops making requests until the next session/day or the cap is raised.
 - **Providers:** OpenAI (default model `gpt-5-mini`, `reasoning_effort` low for fast replies) and any OpenAI-compatible endpoint (Ollama, OpenRouter, local). Anthropic is planned for a later version via the official Java SDK. Prompt caching where supported.
 
 ## 6. Skills (tools the model can call)
@@ -93,8 +94,8 @@ Ported from **Baritone** (branch `26.2`, local checkout at `~/Desktop/baritone`)
 ## 8. Voice (client-side, fully local)
 
 - **Speech-to-text:** whisper.cpp via JNI, bundled natives (Windows x64, macOS arm64/x64; Linux free). Models `tiny` / `base` (default) / `small`, downloaded on first run. Thread-capped so it doesn't hurt FPS.
-- **Text-to-speech:** Piper neural voices (~60 MB each), same voice for everyone.
-- **Positional playback:** through Minecraft's existing OpenAL context, a source positioned at the bot every tick — voice comes from Clanker and falls off with distance.
+- **Text-to-speech:** Piper neural voices (~60 MB each); each player picks the voice they hear. Piper's natives (~80 MB) are too big for the mod jar, so they're downloaded from Maven Central (checksum pinned) along with the models, only when the player presses Download.
+- **Positional playback:** a streaming sound instance in Minecraft's own sound engine (Fabric's custom-stream hook), moved to the bot every tick — voice comes from Clanker, falls off with distance, and follows the Voice/Speech volume slider.
 - **Mic modes:** push-to-talk (default **V**), open mic with voice activity detection, off.
 - **Echo protection:** mic input is ignored while Clanker is speaking, and transcripts matching its recent speech are dropped.
 - **Subtitles** and a "thinking" indicator above Clanker's head.
@@ -186,7 +187,8 @@ src/client/java/io/github/soymods/clanker/client/
 Files on disk:
 - `config/clanker-client.json` — client settings
 - `config/clanker-server.json` — host settings incl. API key
-- `<world>/clanker/memory.json` — per-world memory
+- `<world>/clanker/memory-<name>.json` — per-world notebook
+- `config/clanker-spend.json` — estimated spend, per session and per day
 - `<game dir>/clanker/models/` — Whisper + Piper models
 
 ## 15. Roadmap
@@ -195,9 +197,9 @@ Files on disk:
 |---|---|
 | **0.1** | Fake player spawn/despawn, text chat with the LLM, perception, basic follow / go-to, in-game host settings screen (API key, provider, model). OpenAI + OpenAI-compatible providers. |
 | **0.2** | Pathfinding (interim A*; Baritone port later), mining, collecting, giving/dropping items, knockback — *done* |
-| **0.3** | Crafting, smelting, containers, placing, combat, eating, sleeping, armor — *done*; block/attack permissions and Anthropic provider still to do |
-| **0.4** | Voice: Whisper STT, Piper TTS, positional audio, push-to-talk |
-| **0.5** | Full settings screens (voice, display, permissions), open mic, spend caps, memory |
+| **0.3** | Crafting, smelting, containers, placing, combat, eating, sleeping, armor, block/attack permissions — *done*; Anthropic provider still to do |
+| **0.4** | Voice: Whisper STT, Piper TTS, positional audio, push-to-talk — *done* |
+| **0.5** | Full settings screens (voice, display, permissions), open mic, spend caps, memory — *done* |
 | **1.0** | Personalities, debug tools, polish, Modrinth release |
 | Later | Building from descriptions, multiple Clankers, vision model screenshots |
 

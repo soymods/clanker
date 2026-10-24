@@ -6,6 +6,7 @@ import com.mojang.authlib.GameProfile;
 import io.github.soymods.clanker.Clanker;
 import io.github.soymods.clanker.config.ServerConfig;
 import io.github.soymods.clanker.server.brain.BrainEvent;
+import io.github.soymods.clanker.server.brain.Spend;
 import io.github.soymods.clanker.server.perception.Perception;
 import net.fabricmc.fabric.api.entity.event.v1.EntitySleepEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
@@ -230,6 +231,7 @@ public final class ClankerBots {
 		});
 
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
+			Spend.resetSession();
 			if (readSpawnedState(server)) {
 				try {
 					spawn(server, server.overworld(), null, 0, 0);

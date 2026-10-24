@@ -31,6 +31,8 @@ public class ClankerSettingsScreen extends Screen {
 	private HostSettings settings;
 	private String status = "";
 	private boolean clearKeyRequested;
+	private String pendingKey = "";
+	private String pendingIdle;
 
 	private CycleButton<String> provider;
 	private EditBox model;
@@ -52,6 +54,8 @@ public class ClankerSettingsScreen extends Screen {
 		this.settings = settings;
 		this.status = settings.status;
 		this.clearKeyRequested = false;
+		this.pendingKey = "";
+		this.pendingIdle = null;
 		rebuildWidgets();
 	}
 
@@ -64,8 +68,10 @@ public class ClankerSettingsScreen extends Screen {
 
 		if (!ClientPlayNetworking.canSend(SignalPayload.RequestSettings.TYPE)) {
 			centered(Component.literal("Join a world or server that has Clanker to change its settings."), height / 2 - 20);
+			addRenderableWidget(Button.builder(Component.literal("Voice…"), b -> minecraft.gui.setScreen(new ClankerVoiceScreen(this)))
+					.bounds(width / 2 - 155, height / 2, 150, 20).build());
 			addRenderableWidget(Button.builder(Component.literal("Done"), b -> onClose())
-					.bounds(width / 2 - 75, height / 2, 150, 20).build());
+					.bounds(width / 2 + 5, height / 2, 150, 20).build());
 			return;
 		}
 		if (settings == null) {
@@ -85,14 +91,14 @@ public class ClankerSettingsScreen extends Screen {
 				.withValues(EFFORTS)
 				.create(left, top + ROW * 3 + 12, COLUMN_WIDTH, 20, Component.literal("Reasoning")));
 
-		apiKey = field(right, top, "API key", "", 500);
+		apiKey = field(right, top, "API key", pendingKey, 500);
 		apiKey.setHint(Component.literal(settings.keySet ? "set (" + settings.keySource + ")" : "paste your key"));
 		apiKey.addFormatter((text, offset) -> FormattedCharSequence.forward("•".repeat(text.length()), Style.EMPTY));
 		botName = field(right, top + ROW, "Bot name", settings.botName, 16);
 		listenMode = addRenderableWidget(CycleButton.builder(ClankerSettingsScreen::listenLabel, settings.listenMode)
 				.withValues(LISTEN_MODES)
 				.create(right, top + ROW * 2 + 12, COLUMN_WIDTH, 20, Component.literal("Listens to")));
-		idleSeconds = field(right, top + ROW * 3, "Idle seconds (0 = off)", Integer.toString(settings.idleSeconds), 4);
+		idleSeconds = field(right, top + ROW * 3, "Idle seconds (0 = off)", pendingIdle != null ? pendingIdle : Integer.toString(settings.idleSeconds), 4);
 
 		personality = field(left, top + ROW * 4, "Personality", settings.personality, 1000);
 		personality.setWidth(COLUMN_WIDTH * 2 + GAP);
@@ -104,15 +110,25 @@ public class ClankerSettingsScreen extends Screen {
 		centered(statusText, bottom);
 
 		int buttonsY = bottom + 14;
+		int buttonWidth = (COLUMN_WIDTH * 2 + GAP - 4 * 4) / 5;
+		int step = buttonWidth + 4;
 		Button clearKey = addRenderableWidget(Button.builder(Component.literal("Remove key"), b -> {
 			clearKeyRequested = true;
 			apiKey.setValue("");
 			rebuildWidgets();
-		}).bounds(left, buttonsY, 96, 20).build());
+		}).bounds(left, buttonsY, buttonWidth, 20).build());
+		addRenderableWidget(Button.builder(Component.literal("Limits…"), b -> {
+			keepEdits();
+			minecraft.gui.setScreen(new ClankerLimitsScreen(this, settings));
+		}).bounds(left + step, buttonsY, buttonWidth, 20).build());
+		addRenderableWidget(Button.builder(Component.literal("Voice…"), b -> {
+			keepEdits();
+			minecraft.gui.setScreen(new ClankerVoiceScreen(this));
+		}).bounds(left + step * 2, buttonsY, buttonWidth, 20).build());
 		Button save = addRenderableWidget(Button.builder(Component.literal("Save"), b -> save())
-				.bounds(width / 2 - 48, buttonsY, 96, 20).build());
+				.bounds(left + step * 3, buttonsY, buttonWidth, 20).build());
 		addRenderableWidget(Button.builder(Component.literal("Done"), b -> onClose())
-				.bounds(right + COLUMN_WIDTH - 96, buttonsY, 96, 20).build());
+				.bounds(left + step * 4, buttonsY, buttonWidth, 20).build());
 
 		if (!settings.canEdit) {
 			for (var widget : List.of(provider, model, endpoint, effort, apiKey, botName, listenMode, idleSeconds, personality, clearKey, save)) {
@@ -142,8 +158,28 @@ public class ClankerSettingsScreen extends Screen {
 		}
 	}
 
+	/** Remembers what's typed so far, so visiting the limits page doesn't lose it. The key is never kept. */
+	private void keepEdits() {
+		settings.provider = provider.getValue();
+		settings.model = model.getValue();
+		settings.endpoint = endpoint.getValue();
+		settings.reasoningEffort = effort.getValue();
+		settings.botName = botName.getValue();
+		settings.personality = personality.getValue();
+		settings.listenMode = listenMode.getValue();
+		pendingKey = apiKey.getValue();
+		pendingIdle = idleSeconds.getValue();
+	}
+
 	private void save() {
 		HostSettings update = new HostSettings();
+		update.canBreakBlocks = settings.canBreakBlocks;
+		update.canPlaceBlocks = settings.canPlaceBlocks;
+		update.canAttackMobs = settings.canAttackMobs;
+		update.canAttackPlayers = settings.canAttackPlayers;
+		update.canUseContainers = settings.canUseContainers;
+		update.sessionSpendCap = settings.sessionSpendCap;
+		update.dailySpendCap = settings.dailySpendCap;
 		update.provider = provider.getValue();
 		update.model = model.getValue();
 		update.endpoint = endpoint.getValue();
@@ -161,6 +197,7 @@ public class ClankerSettingsScreen extends Screen {
 		update.newApiKey = apiKey.getValue();
 		update.clearApiKey = clearKeyRequested;
 		apiKey.setValue("");
+		pendingKey = "";
 		status = "Saving…";
 		ClientPlayNetworking.send(new SettingsPayload.Update(update.toJson()));
 	}

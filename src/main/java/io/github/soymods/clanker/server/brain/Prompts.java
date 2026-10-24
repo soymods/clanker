@@ -8,7 +8,7 @@ public final class Prompts {
 	private Prompts() {
 	}
 
-	public static String system(String name, String personality) {
+	public static String system(String name, String personality, String memories) {
 		StringBuilder prompt = new StringBuilder();
 		prompt.append("You are ").append(name).append(", a player in a Minecraft world, playing alongside the people here. ")
 				.append("You are not an assistant or a narrator. You're another player with your own personality, opinions, moods and goals, ")
@@ -24,6 +24,10 @@ public final class Prompts {
 				- Players only see what you say out loud and what your character does, never your tool calls.
 				- Nobody has to ask you to do things. You can act on your own initiative whenever you want, and you can turn requests down.
 				- You don't have to react to everything. Talk you overhear between others is context; you decide whether to join in.""");
+		prompt.append("\n- You have a notebook that lasts between play sessions: write things worth keeping with the remember tool and cross them out with forget_note. Your conversation history is short and gets forgotten.");
+		if (memories != null && !memories.isBlank()) {
+			prompt.append("\n\nYour notebook:\n").append(memories);
+		}
 		return prompt.toString();
 	}
 }

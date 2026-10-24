@@ -1,5 +1,6 @@
 package io.github.soymods.clanker.test;
 
+import io.github.soymods.clanker.client.gui.ClankerLimitsScreen;
 import io.github.soymods.clanker.client.gui.ClankerSettingsScreen;
 import io.github.soymods.clanker.config.ServerConfig;
 import io.github.soymods.clanker.server.bot.ClankerBot;
@@ -59,13 +60,53 @@ public class ClankerClientGameTests implements FabricClientGameTest {
 			});
 			context.takeScreenshot("clanker-settings-saved");
 
+			// Limits: flipping one permission and saving changes only that one, and keeps the key.
+			context.clickScreenButton("Limits…");
+			context.waitFor(client -> client.gui.screen() instanceof ClankerLimitsScreen);
+			context.takeScreenshot("clanker-limits");
+			clickWidget(context, "Attack players");
+			context.clickScreenButton("Back");
+			context.clickScreenButton("Save");
+			singleplayer.getServer().waitFor(server -> ServerConfig.get().canAttackPlayers);
+			singleplayer.getServer().runOnServer(server -> {
+				ServerConfig config = ServerConfig.get();
+				if (!config.canBreakBlocks || !config.canPlaceBlocks || config.sessionSpendCap <= 0 || !TEST_KEY.equals(config.apiKey)) {
+					throw new AssertionError("saving the limits changed other settings");
+				}
+			});
+			context.waitFor(client -> apiKeyField(client.gui.screen()) != null);
+			context.clickScreenButton("Limits…");
+			clickWidget(context, "Attack players");
+			context.clickScreenButton("Back");
+
+			context.clickScreenButton("Voice…");
+			context.waitFor(client -> client.gui.screen() instanceof io.github.soymods.clanker.client.gui.ClankerVoiceScreen);
+			context.takeScreenshot("clanker-voice-settings");
+			context.clickScreenButton("Done");
+			context.waitFor(client -> apiKeyField(client.gui.screen()) != null);
+
 			context.clickScreenButton("Remove key");
 			context.clickScreenButton("Save");
-			singleplayer.getServer().waitFor(server -> ServerConfig.get().apiKey.isEmpty());
+			singleplayer.getServer().waitFor(server -> ServerConfig.get().apiKey.isEmpty() && !ServerConfig.get().canAttackPlayers);
 			context.clickScreenButton("Done");
 
 			singleplayer.getServer().runOnServer(server -> ClankerBots.first().ifPresent(ClankerBots::despawn));
 		}
+	}
+
+	/** Clicks a widget whose label starts with {@code label}, the way a player would. CycleButtons aren't Buttons. */
+	private static void clickWidget(ClientGameTestContext context, String label) {
+		double[] pos = context.computeOnClient(client -> {
+			for (var child : client.gui.screen().children()) {
+				if (child instanceof net.minecraft.client.gui.components.AbstractWidget widget && widget.getMessage().getString().startsWith(label)) {
+					double scale = client.getWindow().getGuiScale();
+					return new double[] {(widget.getX() + widget.getWidth() / 2.0) * scale, (widget.getY() + widget.getHeight() / 2.0) * scale};
+				}
+			}
+			throw new AssertionError("no widget labelled " + label);
+		});
+		context.getInput().setCursorPos(pos[0], pos[1]);
+		context.getInput().pressMouse(org.lwjgl.glfw.GLFW.GLFW_MOUSE_BUTTON_LEFT);
 	}
 
 	private static EditBox apiKeyField(net.minecraft.client.gui.screens.Screen screen) {

@@ -49,6 +49,7 @@ public class Brain {
 	private final List<BrainEvent> pending = new ArrayList<>();
 	private final Map<UUID, Long> conversation = new HashMap<>();
 	private LlmProvider providerOverride;
+	private ServerConfig capConfig;
 
 	private boolean inFlight;
 	private boolean shutdown;
@@ -68,11 +69,17 @@ public class Brain {
 	private long inputTokens;
 	private long outputTokens;
 	private long cachedTokens;
+	private double spent;
 	private String lastError = "";
 
 	public Brain(ClankerBot bot) {
 		this.bot = bot;
 		this.namePattern = Pattern.compile("\\b" + Pattern.quote(bot.name()) + "\\b", Pattern.CASE_INSENSITIVE);
+	}
+
+	/** Checks spend caps against this config instead of the server's, for tests. */
+	public void setCapConfigOverride(ServerConfig config) {
+		this.capConfig = config;
 	}
 
 	/** Replaces the configured provider, for tests. */
@@ -191,6 +198,14 @@ public class Brain {
 	}
 
 	private void startTurn(ClankerPlayer self, long now) {
+		String cap = Spend.capReached(capConfig != null ? capConfig : ServerConfig.get());
+		if (cap != null) {
+			pending.removeIf(e -> e.type() != BrainEvent.Type.SPEECH);
+			lastTurnEnd = now;
+			lastError = "reached " + cap;
+			notice(Component.literal("[Clanker] " + bot.name() + " reached " + cap + " and won't make model requests until it's raised in /clanker config."), true);
+			return;
+		}
 		LlmProvider provider = provider();
 		if (provider == null) {
 			pending.clear();
@@ -212,7 +227,7 @@ public class Brain {
 		inFlight = true;
 		int requestGeneration = generation;
 		ServerConfig config = ServerConfig.get();
-		LlmRequest request = new LlmRequest(Prompts.system(bot.name(), config.personality), List.copyOf(history), Tools.specs());
+		LlmRequest request = new LlmRequest(Prompts.system(bot.name(), config.personality, bot.memory().promptSection()), List.copyOf(history), Tools.specs(config));
 		provider.complete(request).whenComplete((response, error) -> bot.server().execute(() -> {
 			if (requestGeneration == generation) {
 				onResponse(provider, response, error);
@@ -236,6 +251,11 @@ public class Brain {
 		inputTokens += response.usage().inputTokens();
 		outputTokens += response.usage().outputTokens();
 		cachedTokens += response.usage().cachedInputTokens();
+		if (providerOverride == null) {
+			double usd = Spend.cost(Spend.price(ServerConfig.get(), currentModel()), response.usage());
+			spent += usd;
+			Spend.record(usd);
+		}
 
 		history.add(ChatMessage.assistant(response.text(), response.toolCalls()));
 		if (!response.text().isBlank()) {
@@ -319,6 +339,11 @@ public class Brain {
 		return false;
 	}
 
+	private String currentModel() {
+		ServerConfig config = ServerConfig.get();
+		return config.model.isBlank() && config.provider == ServerConfig.Provider.OPENAI ? DEFAULT_OPENAI_MODEL : config.model;
+	}
+
 	private LlmProvider provider() {
 		if (providerOverride != null) {
 			return providerOverride;
@@ -358,8 +383,11 @@ public class Brain {
 	}
 
 	public String status() {
-		return requests + " model requests, " + inputTokens + " input tokens (" + cachedTokens + " cached), "
-				+ outputTokens + " output tokens" + (lastError.isEmpty() ? "" : "; last error: " + lastError);
+		ServerConfig config = ServerConfig.get();
+		String estimate = Spend.isKnown(config, currentModel()) ? "" : " (rough: unknown model price)";
+		return currentModel() + ": " + requests + " model requests, " + inputTokens + " input tokens (" + cachedTokens + " cached), "
+				+ outputTokens + " output tokens, about $" + String.format(java.util.Locale.ROOT, "%.4f", spent) + estimate
+				+ (lastError.isEmpty() ? "" : "; last error: " + lastError);
 	}
 
 	public List<ChatMessage> history() {

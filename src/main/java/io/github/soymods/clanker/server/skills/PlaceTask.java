@@ -61,6 +61,9 @@ public class PlaceTask implements Task {
 		if (!level.getBlockState(target).canBeReplaced()) {
 			return Result.failed("there's already " + Perception.blockName(level.getBlockState(target)) + " at " + Perception.coords(target));
 		}
+		if (!level.mayInteract(player, target)) {
+			return Result.failed("you can't build at " + Perception.coords(target) + " (spawn protection or the world border)");
+		}
 		Direction face = supportFace(level, target);
 		if (face == null) {
 			return Result.failed("nothing to place it against at " + Perception.coords(target) + " (it needs a neighboring block)");

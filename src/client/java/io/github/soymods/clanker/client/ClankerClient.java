@@ -1,14 +1,21 @@
 package io.github.soymods.clanker.client;
 
-import io.github.soymods.clanker.Clanker;
+import io.github.soymods.clanker.client.audio.VoiceInput;
+import io.github.soymods.clanker.client.audio.VoicePlayer;
 import io.github.soymods.clanker.client.config.ClientConfig;
+import io.github.soymods.clanker.client.gui.ClankerHud;
+import io.github.soymods.clanker.client.stt.Transcriber;
+import io.github.soymods.clanker.client.tts.Synthesizer;
 import io.github.soymods.clanker.client.gui.ClankerSettingsScreen;
 import io.github.soymods.clanker.network.HostSettings;
 import io.github.soymods.clanker.network.SettingsPayload;
 import io.github.soymods.clanker.network.SignalPayload;
 import io.github.soymods.clanker.network.SpeechPayload;
+import io.github.soymods.clanker.network.ThinkingPayload;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.Minecraft;
 
@@ -18,10 +25,12 @@ public class ClankerClient implements ClientModInitializer {
 		ClientConfig.load();
 		ClankerKeys.register();
 
-		ClientPlayNetworking.registerGlobalReceiver(SpeechPayload.TYPE, (payload, context) -> {
-			// TODO(0.4): synthesize with Piper and play at the entity's position; show subtitle
-			Clanker.LOGGER.debug("Speech from entity {}: {}", payload.entityId(), payload.text());
-		});
+		ClankerHud.register();
+
+		ClientPlayNetworking.registerGlobalReceiver(SpeechPayload.TYPE, (payload, context) ->
+				VoicePlayer.onSpeech(payload.entityId(), payload.text()));
+		ClientPlayNetworking.registerGlobalReceiver(ThinkingPayload.TYPE, (payload, context) ->
+				ClankerHud.setThinking(payload.entityId(), payload.thinking()));
 
 		ClientPlayNetworking.registerGlobalReceiver(SignalPayload.OpenSettings.TYPE, (payload, context) ->
 				context.client().gui.setScreen(new ClankerSettingsScreen(context.client().gui.screen())));
@@ -32,7 +41,21 @@ public class ClankerClient implements ClientModInitializer {
 			}
 		});
 
-		ClientTickEvents.END_CLIENT_TICK.register(ClankerClient::handleKeys);
+		ClientTickEvents.END_CLIENT_TICK.register(client -> {
+			handleKeys(client);
+			VoiceInput.tick(client);
+			VoicePlayer.tick(client);
+		});
+		ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
+			VoiceInput.stop();
+			Transcriber.shutdown();
+			Synthesizer.shutdown();
+		});
+		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(() -> {
+			VoiceInput.stop();
+			VoicePlayer.clear(client);
+			ClankerHud.clear();
+		}));
 	}
 
 	private static void handleKeys(Minecraft client) {

@@ -542,4 +542,78 @@ public class ClankerGameTests {
 				})
 				.thenExecute(() -> finish(helper, bot));
 	}
+
+	@GameTest(structure = ARENA)
+	public void remembersNotesAcrossSessions(GameTestHelper helper) {
+		ClankerBot bot = spawn(helper, 2.5, 2.5, FakeProvider.silent());
+		String result = Tools.execute(bot, new ToolCall("1", "remember", "{\"note\":\"Base is at 100, 64, -20\"}"));
+		helper.assertTrue(result.startsWith("Wrote note #"), result);
+		int id = bot.memory().notes().getLast().id();
+		helper.assertTrue(bot.memory().promptSection().contains("Base is at 100, 64, -20"), "note missing from prompt");
+		helper.assertTrue(io.github.soymods.clanker.server.brain.Prompts.system(bot.name(), "", bot.memory().promptSection()).contains("Your notebook:"), "prompt has no notebook");
+		// A fresh load (next session) sees the same note.
+		var reloaded = io.github.soymods.clanker.server.brain.Memory.load(helper.getLevel().getServer(), bot.name());
+		helper.assertTrue(reloaded.notes().stream().anyMatch(n -> n.text().contains("Base is at")), "note didn't persist");
+		helper.assertTrue(Tools.execute(bot, new ToolCall("2", "forget_note", "{\"id\":" + id + "}")).startsWith("Crossed out"), "forget_note");
+		helper.assertTrue(bot.memory().notes().isEmpty(), "note not removed");
+		finish(helper, bot);
+	}
+
+	@GameTest
+	public void spendMathAndCaps(GameTestHelper helper) {
+		ServerConfig config = new ServerConfig();
+		var mini = io.github.soymods.clanker.server.brain.Spend.price(config, "gpt-5-mini-2025-08-07");
+		helper.assertValueEqual(mini.input(), 0.25, "gpt-5-mini input price via dated name");
+		double cost = io.github.soymods.clanker.server.brain.Spend.cost(mini, new LlmResponse.Usage(1_000_000, 1_000_000, 400_000));
+		helper.assertTrue(Math.abs(cost - (0.6 * 0.25 + 0.4 * 0.025 + 1.0 * 2)) < 1e-9, "cost was " + cost);
+		helper.assertFalse(io.github.soymods.clanker.server.brain.Spend.isKnown(config, "gpt-9-ultra"), "unknown model should use the fallback");
+		config.provider = ServerConfig.Provider.OPENAI_COMPATIBLE;
+		helper.assertValueEqual(io.github.soymods.clanker.server.brain.Spend.price(config, "llama3").output(), 0.0, "local models are free");
+
+		ServerConfig tight = new ServerConfig();
+		tight.sessionSpendCap = 1e-12;
+		io.github.soymods.clanker.server.brain.Spend.record(1e-9);
+		helper.assertTrue(io.github.soymods.clanker.server.brain.Spend.capReached(tight) != null, "cap not reached");
+		tight.sessionSpendCap = 0;
+		tight.dailySpendCap = 0;
+		helper.assertTrue(io.github.soymods.clanker.server.brain.Spend.capReached(tight) == null, "0 should mean no cap");
+		helper.succeed();
+	}
+
+	@GameTest(structure = ARENA, maxTicks = 100)
+	public void spendCapBlocksRequests(GameTestHelper helper) {
+		FakeProvider provider = FakeProvider.silent();
+		ClankerBot bot = spawn(helper, 2.5, 2.5, provider);
+		ServerConfig tight = new ServerConfig();
+		tight.sessionSpendCap = 1e-12;
+		io.github.soymods.clanker.server.brain.Spend.record(1e-9);
+		bot.brain().setCapConfigOverride(tight);
+		ServerPlayer player = mockPlayer(helper, 5.5, 5.5);
+		int before = provider.requests.size();
+		helper.startSequence()
+				.thenExecute(() -> bot.brain().hear(player, bot.name() + ", hi", false))
+				.thenIdle(30)
+				.thenExecute(() -> {
+					helper.assertValueEqual(provider.requests.size(), before, "requests made past the cap");
+					helper.assertTrue(bot.brain().status().contains("spend cap"), "status doesn't mention the cap: " + bot.brain().status());
+				})
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest(structure = ARENA)
+	public void hostPermissionsRemoveTools(GameTestHelper helper) {
+		ClankerBot bot = spawn(helper, 2.5, 2.5, FakeProvider.silent());
+		ServerConfig config = ServerConfig.get();
+		boolean before = config.canBreakBlocks;
+		try {
+			config.canBreakBlocks = false;
+			helper.assertFalse(Tools.specs(config).stream().anyMatch(t -> t.name().equals("mine")), "mine still offered");
+			helper.assertTrue(Tools.execute(bot, new ToolCall("1", "mine", "{\"block\":\"stone\"}")).contains("turned off"), "mine not refused");
+		} finally {
+			config.canBreakBlocks = before;
+		}
+		helper.assertTrue(Tools.specs(config).stream().anyMatch(t -> t.name().equals("mine")), "mine missing when allowed");
+		helper.assertFalse(config.canAttackPlayers, "attacking players should be off by default");
+		finish(helper, bot);
+	}
 }

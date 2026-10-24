@@ -8,7 +8,7 @@ base {
 }
 
 repositories {
-	// Add repositories for other mods here. Loom adds Minecraft and Fabric automatically.
+	mavenCentral()
 }
 
 loom {
@@ -35,6 +35,11 @@ dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	// whisper.cpp bindings with natives for Windows, macOS and Linux (~5 MB), shipped inside the mod jar.
+	// Piper (~80 MB of natives) is downloaded on demand instead; see client/natives/VoiceFiles.
+	implementation "io.github.givimad:whisper-jni:${project.whisper_jni_version}"
+	include "io.github.givimad:whisper-jni:${project.whisper_jni_version}"
 }
 
 processResources {

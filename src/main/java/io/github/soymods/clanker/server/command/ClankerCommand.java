@@ -9,6 +9,7 @@ import io.github.soymods.clanker.server.bot.ClankerBot;
 import io.github.soymods.clanker.server.bot.ClankerBots;
 import io.github.soymods.clanker.server.bot.ClankerPlayer;
 import io.github.soymods.clanker.server.brain.Brain;
+import io.github.soymods.clanker.server.brain.Spend;
 import io.github.soymods.clanker.server.perception.Perception;
 import io.github.soymods.clanker.server.safety.ClankerPermissions;
 import io.github.soymods.clanker.server.skills.ComeToTask;
@@ -51,6 +52,10 @@ public final class ClankerCommand {
 								.executes(context -> goTo(context, Vec3Argument.getVec3(context, "pos")))))
 				.then(Commands.literal("forget").requires(ClankerPermissions::canManage)
 						.executes(ClankerCommand::forget))
+				.then(Commands.literal("memory")
+						.executes(ClankerCommand::memory)
+						.then(Commands.literal("clear").requires(ClankerPermissions::canManage)
+								.executes(ClankerCommand::clearMemory)))
 				.then(Commands.literal("config")
 						.executes(ClankerCommand::openConfig)
 						.then(Commands.literal("reload").requires(ClankerPermissions::canManage)
@@ -105,6 +110,8 @@ public final class ClankerCommand {
 		String model = config.model.isBlank() && config.provider == ServerConfig.Provider.OPENAI ? Brain.DEFAULT_OPENAI_MODEL : config.model;
 		String key = config.resolveApiKey().isBlank() ? "not set" : "set (" + config.apiKeySource() + ")";
 		StringBuilder text = new StringBuilder("Provider: " + config.provider + ", model: " + model + ", API key: " + key);
+		text.append(String.format(java.util.Locale.ROOT, "\nSpent about $%.2f this session (cap %s), $%.2f today (cap %s)",
+				Spend.session(), cap(config.sessionSpendCap), Spend.today(), cap(config.dailySpendCap)));
 		Optional<ClankerBot> bot = ClankerBots.first();
 		if (bot.isEmpty()) {
 			text.append("\nClanker isn't in the world.");
@@ -118,6 +125,33 @@ public final class ClankerCommand {
 					.append("\n").append(bot.get().brain().status());
 		}
 		source.sendSuccess(() -> Component.literal(text.toString()), false);
+		return 1;
+	}
+
+	private static String cap(double usd) {
+		return usd <= 0 ? "none" : String.format(java.util.Locale.ROOT, "$%.2f", usd);
+	}
+
+	private static int memory(CommandContext<CommandSourceStack> context) {
+		Optional<ClankerBot> bot = requireBot(context);
+		if (bot.isEmpty()) {
+			return 0;
+		}
+		var notes = bot.get().memory().notes();
+		String text = notes.isEmpty() ? bot.get().name() + "'s notebook is empty."
+				: bot.get().name() + "'s notebook:\n" + notes.stream().map(n -> "#" + n.id() + " (" + n.when() + ") " + n.text())
+						.collect(java.util.stream.Collectors.joining("\n"));
+		context.getSource().sendSuccess(() -> Component.literal(text), false);
+		return 1;
+	}
+
+	private static int clearMemory(CommandContext<CommandSourceStack> context) {
+		Optional<ClankerBot> bot = requireBot(context);
+		if (bot.isEmpty()) {
+			return 0;
+		}
+		bot.get().memory().clear();
+		context.getSource().sendSuccess(() -> Component.literal(bot.get().name() + "'s notebook was cleared"), true);
 		return 1;
 	}
 

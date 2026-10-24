@@ -41,7 +41,20 @@ public class ServerConfig {
 	public int idleSeconds = 30;
 	public ListenMode listenMode = ListenMode.NAME_ONLY;
 	public int listenRadius = 24;
-	// Skin, permissions and spend caps arrive with the features they control (see DESIGN.md roadmap).
+
+	// What Clanker is allowed to do
+	public boolean canBreakBlocks = true;
+	public boolean canPlaceBlocks = true;
+	public boolean canAttackMobs = true;
+	public boolean canAttackPlayers = false;
+	public boolean canUseContainers = true;
+
+	// Spending, in USD; 0 means no cap
+	public double sessionSpendCap = 2.0;
+	public double dailySpendCap = 5.0;
+	/** Custom prices per million tokens for models Clanker doesn't know; 0 uses the built-in table. */
+	public double priceInputPerMillion = 0;
+	public double priceOutputPerMillion = 0;
 
 	/** Fallback key file outside any game directory, so dev runs and tests share it without it being in the repo. */
 	private static final Path KEY_FILE = Path.of(System.getProperty("user.home"), ".clanker", "api-key.txt");
