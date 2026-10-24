@@ -29,7 +29,11 @@ public class ServerConfig {
 	public String apiKey = "";
 	/** Base URL for {@link Provider#OPENAI_COMPATIBLE} (e.g. Ollama or OpenRouter). */
 	public String endpoint = "";
-	/** Passed as {@code reasoning_effort}. Lower effort answers faster, which matters more in a game than deep reasoning. Blank uses the model's default. */
+	/**
+	 * Passed as {@code reasoning_effort} ("none", "minimal", "low", …). Lower effort answers faster, which matters more
+	 * in a game than deep reasoning. Blank uses the model's default. A model that rejects the value gets the lowest one
+	 * it supports instead.
+	 */
 	public String reasoningEffort = "low";
 	/** Temperament description. Shapes how Clanker decides, never what it says. */
 	public String personality = "";

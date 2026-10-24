@@ -25,7 +25,7 @@ public class ClankerSettingsScreen extends Screen {
 	private static final int ROW = 32; // fits the 854x480 minimum window at GUI scale 2
 	private static final List<String> PROVIDERS = List.of("OPENAI", "OPENAI_COMPATIBLE");
 	private static final List<String> LISTEN_MODES = List.of("NAME_ONLY", "NEARBY", "EVERYONE");
-	private static final List<String> EFFORTS = List.of("", "minimal", "low", "medium", "high");
+	private static final List<String> EFFORTS = List.of("", "none", "minimal", "low", "medium", "high");
 
 	private final Screen parent;
 	private HostSettings settings;
@@ -225,6 +225,6 @@ public class ClankerSettingsScreen extends Screen {
 	}
 
 	private static Component effortLabel(String value) {
-		return Component.literal(value.isEmpty() ? "Default" : value);
+		return Component.literal(value.isEmpty() ? "Default" : value.equals("none") ? "none (fastest)" : value);
 	}
 }

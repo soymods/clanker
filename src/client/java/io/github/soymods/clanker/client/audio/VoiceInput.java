@@ -235,10 +235,13 @@ public final class VoiceInput {
 			return;
 		}
 		transcribing++;
+		long started = System.currentTimeMillis();
 		String prompt = String.join(", ", VoicePlayer.speakerNames()) + ". Minecraft.";
 		Transcriber.transcribe(VoiceFiles.whisperModel(config), samples, config.language, prompt)
 				.whenComplete((text, error) -> client.execute(() -> {
 					transcribing--;
+					Clanker.LOGGER.info("Transcribed {}s of speech in {}s", VoicePlayer.seconds(samples.length * 1000L / Microphone.SAMPLE_RATE),
+							VoicePlayer.seconds(System.currentTimeMillis() - started));
 					if (error != null) {
 						Clanker.LOGGER.warn("Transcription failed", error);
 						hint(client, "Speech recognition failed: " + (error.getCause() != null ? error.getCause().getMessage() : error.getMessage()));

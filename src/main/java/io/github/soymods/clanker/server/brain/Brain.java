@@ -41,6 +41,8 @@ public class Brain {
 	private static final long CONVERSATION_WINDOW_MS = 30_000;
 	private static final long NOTICE_INTERVAL_MS = 60_000;
 	private static final long MAX_RETRY_DELAY_MS = 300_000;
+	/** A request with no reply by now is dropped, even if the connection never says it failed. */
+	private static final long REQUEST_GIVE_UP_MS = 150_000;
 	private static final Pattern STOP_WORD = Pattern.compile("\\b(stop|halt|freeze)\\b", Pattern.CASE_INSENSITIVE);
 
 	private final ClankerBot bot;
@@ -62,6 +64,15 @@ public class Brain {
 	private int turnStartHistorySize;
 	private int errorStreak;
 	private long retryAt;
+	private SentenceSplitter splitter = new SentenceSplitter();
+	private final StringBuilder streamed = new StringBuilder();
+	/** What this request has already said out loud while its reply was still arriving. */
+	private final StringBuilder spokenThisRequest = new StringBuilder();
+	private long requestStartedAt;
+	private long firstTextAt;
+	/** When someone last spoke to Clanker and it hasn't answered yet, for the timing log. */
+	private long heardAt;
+	private String heardFrom = "";
 	private String lastPhase;
 	private String lastWeather;
 
@@ -116,6 +127,10 @@ public class Brain {
 		long now = System.currentTimeMillis();
 		String who = speaker.getName().getString();
 		boolean addressed = isAddressed(speaker, text, now);
+		if (addressed && heardAt == 0) {
+			heardAt = now;
+			heardFrom = who;
+		}
 		if (addressed) {
 			// Being spoken to mid-thought: drop the request and think again with everything that's been said.
 			abandonRequest();
@@ -140,7 +155,20 @@ public class Brain {
 		}
 		generation++;
 		inFlight = false;
-		undoEmptyTurn();
+		keepSpokenOrUndo();
+	}
+
+	/**
+	 * For a request that ends early: keeps what it already said out loud in the history, so Clanker knows it said it,
+	 * or else takes the empty turn back out.
+	 */
+	private void keepSpokenOrUndo() {
+		if (!spokenThisRequest.isEmpty()) {
+			history.add(ChatMessage.assistant(spokenThisRequest.toString().strip(), List.of()));
+			spokenThisRequest.setLength(0);
+		} else {
+			undoEmptyTurn();
+		}
 	}
 
 	/** If the turn hasn't done anything yet, takes it back out of the history and keeps its events for the next one. */
@@ -193,10 +221,16 @@ public class Brain {
 		if (bot.server().getTickCount() % 20 == 0) {
 			watchWorld(self);
 		}
+		long now = System.currentTimeMillis();
 		if (inFlight) {
+			if (now - requestStartedAt > REQUEST_GIVE_UP_MS) {
+				generation++;
+				inFlight = false;
+				lastTurnEnd = now;
+				onError(new LlmException(0, "no reply after " + REQUEST_GIVE_UP_MS / 1000 + " seconds"));
+			}
 			return;
 		}
-		long now = System.currentTimeMillis();
 		int idleSeconds = ServerConfig.get().idleSeconds;
 		if (idleSeconds > 0 && pending.isEmpty() && humansOnline() && now - lastActivity > idleSeconds * 1000L) {
 			post(BrainEvent.of(BrainEvent.Type.IDLE, "Nothing new has happened for " + (now - lastActivity) / 1000 + " seconds."));
@@ -260,9 +294,19 @@ public class Brain {
 	private void send(LlmProvider provider) {
 		inFlight = true;
 		int requestGeneration = generation;
+		splitter = new SentenceSplitter();
+		streamed.setLength(0);
+		spokenThisRequest.setLength(0);
+		requestStartedAt = System.currentTimeMillis();
+		firstTextAt = 0;
 		ServerConfig config = ServerConfig.get();
 		LlmRequest request = new LlmRequest(Prompts.system(bot.name(), config.personality, bot.memory().promptSection()), List.copyOf(history), Tools.specs(config));
-		provider.complete(request).whenComplete((response, error) -> bot.server().execute(() -> {
+		// Text pieces and the finished reply both hop to the server thread in the order they arrived.
+		provider.complete(request, piece -> bot.server().execute(() -> {
+			if (requestGeneration == generation && !shutdown) {
+				onText(piece);
+			}
+		})).whenComplete((response, error) -> bot.server().execute(() -> {
 			if (requestGeneration == generation) {
 				onResponse(provider, response, error);
 			} else if (response != null) {
@@ -271,12 +315,40 @@ public class Brain {
 		}));
 	}
 
+	/** A piece of a reply that's still arriving: speaks each sentence as soon as it's complete. */
+	private void onText(String piece) {
+		if (firstTextAt == 0) {
+			firstTextAt = System.currentTimeMillis();
+		}
+		streamed.append(piece);
+		for (String sentence : splitter.add(piece)) {
+			speak(sentence);
+		}
+	}
+
+	private void speak(String text) {
+		if (text.isBlank()) {
+			return;
+		}
+		if (heardAt > 0) {
+			Clanker.LOGGER.info("{} started answering {} {}s after hearing them", bot.name(), heardFrom, seconds(System.currentTimeMillis() - heardAt));
+			heardAt = 0;
+		}
+		bot.say(text);
+		spokenThisRequest.append(text).append(' ');
+	}
+
+	private static String seconds(long millis) {
+		return String.format(java.util.Locale.ROOT, "%.2f", millis / 1000.0);
+	}
+
 	private void onResponse(LlmProvider provider, LlmResponse response, Throwable error) {
 		inFlight = false;
 		long now = System.currentTimeMillis();
 		lastTurnEnd = now;
 		lastActivity = now;
 		if (error != null) {
+			Clanker.LOGGER.info("{} model request failed after {}s", bot.name(), seconds(now - requestStartedAt));
 			onError(error instanceof CompletionException && error.getCause() != null ? error.getCause() : error);
 			return;
 		}
@@ -284,12 +356,21 @@ public class Brain {
 		errorStreak = 0;
 		retryAt = 0;
 		recordUsage(response);
+		Clanker.LOGGER.info("{} model reply took {}s ({}): {} input tokens ({} cached), {} output, {} tool calls", bot.name(),
+				seconds(now - requestStartedAt), firstTextAt > 0 ? "first words after " + seconds(firstTextAt - requestStartedAt) + "s" : "no words",
+				response.usage().inputTokens(), response.usage().cachedInputTokens(), response.usage().outputTokens(), response.toolCalls().size());
 
 		history.add(ChatMessage.assistant(response.text(), response.toolCalls()));
-		if (!response.text().isBlank()) {
-			bot.say(response.text());
+		// The rest of the reply: whatever didn't arrive in pieces (all of it, from a provider that doesn't stream).
+		String text = response.text();
+		String unseen = text.startsWith(streamed.toString()) ? text.substring(streamed.length()) : streamed.isEmpty() ? text : "";
+		for (String sentence : splitter.add(unseen)) {
+			speak(sentence);
 		}
+		speak(splitter.flush());
+		spokenThisRequest.setLength(0);
 		if (response.toolCalls().isEmpty()) {
+			heardAt = 0;
 			return;
 		}
 		for (ToolCall call : response.toolCalls()) {
@@ -321,7 +402,7 @@ public class Brain {
 
 	private void onError(Throwable error) {
 		// Keep the events for the retry, so failures don't pile up.
-		undoEmptyTurn();
+		keepSpokenOrUndo();
 		errorStreak++;
 		retryAt = System.currentTimeMillis() + Math.min(MAX_RETRY_DELAY_MS, 5_000L << Math.min(errorStreak - 1, 6));
 		String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();

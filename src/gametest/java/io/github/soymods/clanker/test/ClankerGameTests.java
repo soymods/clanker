@@ -705,6 +705,99 @@ public class ClankerGameTests {
 		helper.succeed();
 	}
 
+	/** Says {@code early} while the reply is still coming, then finishes with {@code full} once {@code held} completes. */
+	private static io.github.soymods.clanker.server.brain.llm.LlmProvider streaming(String early, java.util.concurrent.CompletableFuture<LlmResponse> held) {
+		return new io.github.soymods.clanker.server.brain.llm.LlmProvider() {
+			@Override
+			public java.util.concurrent.CompletableFuture<LlmResponse> complete(LlmRequest request) {
+				return held;
+			}
+
+			@Override
+			public java.util.concurrent.CompletableFuture<LlmResponse> complete(LlmRequest request, java.util.function.Consumer<String> onText) {
+				for (String piece : early.split("(?<= )")) {
+					onText.accept(piece);
+				}
+				return held;
+			}
+		};
+	}
+
+	@GameTest(structure = ARENA, maxTicks = 400)
+	public void speaksSentencesAsTheyArrive(GameTestHelper helper) {
+		java.util.concurrent.CompletableFuture<LlmResponse> held = new java.util.concurrent.CompletableFuture<>();
+		ClankerBot bot = spawn(helper, 2.5, 2.5, FakeProvider.silent());
+		bot.brain().setProviderOverride(streaming("Sure, it's 1.5 blocks away. I'll", held));
+		ServerPlayer player = mockPlayer(helper, 5.5, 5.5);
+		helper.startSequence()
+				.thenExecute(() -> bot.brain().hear(player, bot.name() + ", where's the chest?", false))
+				.thenWaitUntil(() -> helper.assertValueEqual(bot.lastSpoken(), "Sure, it's 1.5 blocks away.", "first sentence"))
+				.thenExecute(() -> {
+					helper.assertValueEqual(bot.spokenCount(), 1, "lines said before the reply finished");
+					held.complete(FakeProvider.reply("Sure, it's 1.5 blocks away. I'll show you."));
+				})
+				.thenWaitUntil(() -> helper.assertValueEqual(bot.lastSpoken(), "I'll show you.", "the rest"))
+				.thenExecute(() -> {
+					helper.assertValueEqual(bot.spokenCount(), 2, "lines said");
+					helper.assertTrue(bot.brain().history().stream().anyMatch(m -> m.role() == ChatMessage.Role.ASSISTANT
+							&& "Sure, it's 1.5 blocks away. I'll show you.".equals(m.content())), "full reply not in history");
+				})
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest(structure = ARENA, maxTicks = 400)
+	public void interruptedReplyKeepsWhatWasSaid(GameTestHelper helper) {
+		java.util.concurrent.CompletableFuture<LlmResponse> held = new java.util.concurrent.CompletableFuture<>();
+		ClankerBot bot = spawn(helper, 2.5, 2.5, FakeProvider.silent());
+		bot.brain().setProviderOverride(streaming("Okay, so there was this creeper. And", held));
+		ServerPlayer player = mockPlayer(helper, 5.5, 5.5);
+		helper.startSequence()
+				.thenExecute(() -> bot.brain().hear(player, bot.name() + ", tell me a story", false))
+				.thenWaitUntil(() -> helper.assertValueEqual(bot.spokenCount(), 1, "lines said"))
+				.thenExecute(() -> {
+					bot.brain().setProviderOverride(FakeProvider.silent());
+					bot.brain().hear(player, bot.name() + ", wait", true, true);
+				})
+				.thenWaitUntil(() -> helper.assertTrue(bot.brain().history().stream().anyMatch(m -> m.role() == ChatMessage.Role.ASSISTANT
+						&& "Okay, so there was this creeper.".equals(m.content())), "what it already said was dropped from history"))
+				.thenExecute(() -> finish(helper, bot));
+	}
+
+	@GameTest
+	public void readsStreamedReplies(GameTestHelper helper) {
+		StringBuilder seen = new StringBuilder();
+		LlmResponse response = OpenAiProvider.readStream(java.util.stream.Stream.of(
+				": keep-alive",
+				"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}",
+				"",
+				"data: {\"choices\":[{\"delta\":{\"content\":\"On \"}}]}",
+				"data: {\"choices\":[{\"delta\":{\"content\":\"it.\"}}]}",
+				"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"mine\",\"arguments\":\"\"}}]}}]}",
+				"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"block\\\":\"}}]}}]}",
+				"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"stone\\\"}\"}}]}}]}",
+				"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}",
+				"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":120,\"completion_tokens\":9,\"prompt_tokens_details\":{\"cached_tokens\":100}}}",
+				"data: [DONE]"), seen::append);
+		helper.assertValueEqual(response.text(), "On it.", "text");
+		helper.assertValueEqual(seen.toString(), "On it.", "pieces handed over");
+		helper.assertValueEqual(response.toolCalls().size(), 1, "tool calls");
+		helper.assertValueEqual(response.toolCalls().getFirst().name(), "mine", "tool name");
+		helper.assertValueEqual(response.toolCalls().getFirst().arguments(), "{\"block\":\"stone\"}", "tool arguments");
+		helper.assertValueEqual(response.usage(), new LlmResponse.Usage(120, 9, 100), "usage");
+
+		// a server that ignores "stream" and answers with plain JSON
+		LlmResponse plain = OpenAiProvider.readStream(java.util.stream.Stream.of(
+				"{\"choices\":[{\"message\":{\"content\":\"hi\"}}]}"), piece -> {
+		});
+		helper.assertValueEqual(plain.text(), "hi", "plain JSON reply");
+
+		helper.assertValueEqual(OpenAiProvider.lowestSupported(
+				"unsupported value: 'reasoning_effort' does not support 'none' with this model. supported values are: 'minimal', 'low', 'medium', and 'high'.", "none"),
+				"minimal", "fallback effort");
+		helper.assertValueEqual(OpenAiProvider.lowestSupported("unrecognized request argument supplied: reasoning_effort", "low"), "", "no reasoning at all");
+		helper.succeed();
+	}
+
 	@GameTest(structure = ARENA, maxTicks = 400)
 	public void newSpeechInterruptsThinking(GameTestHelper helper) {
 		java.util.concurrent.CompletableFuture<LlmResponse> held = new java.util.concurrent.CompletableFuture<>();

@@ -21,7 +21,8 @@ import java.util.Set;
 public final class VoicePlayer {
 	private static final long ECHO_WINDOW_MS = 20_000;
 
-	public record Line(int entityId, String speaker, String text, Synthesizer.Audio audio) {
+	/** {@code receivedAt} is when the server's speech arrived, for the timing log. */
+	public record Line(int entityId, String speaker, String text, Synthesizer.Audio audio, long receivedAt) {
 	}
 
 	private record Spoken(String text, long at) {
@@ -67,6 +68,7 @@ public final class VoicePlayer {
 		}
 		synthesizing++;
 		int lineEpoch = epoch;
+		long receivedAt = System.currentTimeMillis();
 		Synthesizer.speak(VoiceFiles.voiceId(config), config.ttsSpeed, text).whenComplete((audio, error) -> client.execute(() -> {
 			synthesizing--;
 			if (lineEpoch != epoch) {
@@ -78,7 +80,8 @@ public final class VoicePlayer {
 				return;
 			}
 			lastError = "";
-			queue.add(new Line(entityId, speaker, text, audio));
+			Clanker.LOGGER.info("Synthesized a {}-character line in {}s", text.length(), seconds(System.currentTimeMillis() - receivedAt));
+			queue.add(new Line(entityId, speaker, text, audio, receivedAt));
 		}));
 	}
 
@@ -94,9 +97,14 @@ public final class VoicePlayer {
 			playing = new VoiceSoundInstance(current.entityId(), current.audio(), ClientConfig.get().ttsVolume);
 			startedAt = System.currentTimeMillis();
 			client.getSoundManager().play(playing);
+			Clanker.LOGGER.info("Started saying a line {}s after it arrived", seconds(startedAt - current.receivedAt()));
 		}
 		long now = System.currentTimeMillis();
 		recent.removeIf(spoken -> now - spoken.at() > ECHO_WINDOW_MS);
+	}
+
+	static String seconds(long millis) {
+		return String.format(java.util.Locale.ROOT, "%.2f", millis / 1000.0);
 	}
 
 	/** The sound engine picks new sounds up on its own tick; don't treat "not active yet" as finished. */

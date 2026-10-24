@@ -19,7 +19,7 @@ import java.util.stream.Collectors;
 
 /**
  * Talks to the real configured model. Skipped unless CLANKER_LIVE_TEST=1, since it spends API credit;
- * CLANKER_LIVE_MODEL overrides the model.
+ * CLANKER_LIVE_MODEL overrides the model and CLANKER_LIVE_EFFORT the reasoning effort.
  * The API key is resolved by the mod itself (env, config, or ~/.clanker/api-key.txt).
  */
 @SuppressWarnings("removal")
@@ -50,6 +50,10 @@ public class LiveSmokeTests {
 		String model = System.getenv("CLANKER_LIVE_MODEL");
 		if (model != null && !model.isBlank()) {
 			ServerConfig.get().model = model;
+		}
+		String effort = System.getenv("CLANKER_LIVE_EFFORT");
+		if (effort != null) {
+			ServerConfig.get().reasoningEffort = effort;
 		}
 		ClankerBot bot;
 		try {

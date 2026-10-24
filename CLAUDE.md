@@ -7,7 +7,7 @@ Fabric mod: an LLM-driven fake player with local voice. Full plan and roadmap in
 - Java 25 required: `JAVA_HOME=/opt/homebrew/Cellar/openjdk@25/25.0.3/libexec/openjdk.jdk/Contents/Home ./gradlew build`
 - Dev client: `./gradlew runClient` (dev server: `./gradlew runServer`)
 - Headless server tests: `./gradlew runGameTest` (tests live in `src/gametest`; they use `FakeProvider`, never a real API)
-- Live model smoke test: `CLANKER_LIVE_TEST=1 ./gradlew runGameTest` (optional `CLANKER_LIVE_MODEL=...`); costs a fraction of a cent
+- Live model smoke test: `CLANKER_LIVE_TEST=1 ./gradlew runGameTest` (optional `CLANKER_LIVE_MODEL=...`, `CLANKER_LIVE_EFFORT=...`); costs a fraction of a cent
 - Client tests (opens a game window, screenshots in `build/run/clientGameTest/screenshots`): `./gradlew runClientGameTest`
 - Gametest ticks run unthrottled, so anything timed in wall-clock ms (brain cooldowns, model calls) needs wall-clock waits, not maxTicks
 - API key for dev/tests: the user keeps it in `~/.clanker/api-key.txt`. Never read, print, or copy that file; the mod reads it itself (`ServerConfig.resolveApiKey`).
