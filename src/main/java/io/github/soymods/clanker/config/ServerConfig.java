@@ -62,7 +62,7 @@ public class ServerConfig {
 	}
 
 	// Brain
-	public Provider provider = Provider.OPENAI;
+	public Provider provider = Provider.XAI;
 	public String model = "";
 	/** The OpenAI key, also used for {@link Provider#OPENAI_COMPATIBLE} endpoints that need one. */
 	public String apiKey = "";
