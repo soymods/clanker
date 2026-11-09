@@ -8,6 +8,7 @@ import io.github.soymods.clanker.client.stt.Transcriber;
 import io.github.soymods.clanker.client.tts.Synthesizer;
 import io.github.soymods.clanker.client.gui.ClankerSettingsScreen;
 import io.github.soymods.clanker.network.HostSettings;
+import io.github.soymods.clanker.network.PresencePayload;
 import io.github.soymods.clanker.network.SettingsPayload;
 import io.github.soymods.clanker.network.SignalPayload;
 import io.github.soymods.clanker.network.SpeechPayload;
@@ -36,6 +37,8 @@ public class ClankerClient implements ClientModInitializer {
 		ClientPlayNetworking.registerGlobalReceiver(VoiceAudioPayload.TYPE, (payload, context) ->
 				VoicePlayer.onAudio(payload.lineId(), payload.pcm(), payload.end(), payload.failed()));
 		ClientReceiveMessageEvents.ALLOW_GAME.register((message, overlay) -> overlay || !isVoicedLine(message));
+		ClientPlayNetworking.registerGlobalReceiver(PresencePayload.TYPE, (payload, context) ->
+				VoiceInput.setClankerPresent(payload.present()));
 		ClientPlayNetworking.registerGlobalReceiver(ThinkingPayload.TYPE, (payload, context) ->
 				ClankerHud.setThinking(payload.entityId(), payload.thinking()));
 

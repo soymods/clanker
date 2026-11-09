@@ -16,6 +16,7 @@ public final class ClankerNetworking {
 		PayloadTypeRegistry.clientboundPlay().register(SpeechPayload.TYPE, SpeechPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(VoiceAudioPayload.TYPE, VoiceAudioPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(ThinkingPayload.TYPE, ThinkingPayload.CODEC);
+		PayloadTypeRegistry.clientboundPlay().register(PresencePayload.TYPE, PresencePayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(SettingsPayload.TYPE, SettingsPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(SignalPayload.OpenSettings.TYPE, SignalPayload.OpenSettings.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(UtterancePayload.TYPE, UtterancePayload.CODEC);

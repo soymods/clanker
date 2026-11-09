@@ -16,6 +16,8 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import io.github.soymods.clanker.network.PresencePayload;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.network.DisconnectionDetails;
@@ -182,6 +184,15 @@ public final class ClankerBots {
 		}
 	}
 
+	/** What players were last told about whether a Clanker is here. */
+	private static boolean announcedPresent;
+
+	private static void sendPresence(ServerPlayer player, boolean present) {
+		if (!(player instanceof ClankerPlayer) && ServerPlayNetworking.canSend(player, PresencePayload.TYPE)) {
+			ServerPlayNetworking.send(player, new PresencePayload(present));
+		}
+	}
+
 	public static void register() {
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
 			if (restoreRetryTick >= 0 && server.getTickCount() >= restoreRetryTick) {
@@ -190,6 +201,13 @@ public final class ClankerBots {
 			}
 			for (ClankerBot bot : BOTS.values()) {
 				bot.serverTick();
+			}
+			boolean present = !BOTS.isEmpty();
+			if (present != announcedPresent) {
+				announcedPresent = present;
+				for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+					sendPresence(player, present);
+				}
 			}
 		});
 
@@ -271,6 +289,7 @@ public final class ClankerBots {
 				server.execute(() -> restore(server, 1));
 			}
 			if (!(handler.player instanceof ClankerPlayer)) {
+				sendPresence(handler.player, !BOTS.isEmpty());
 				for (ClankerBot bot : BOTS.values()) {
 					bot.brain().post(BrainEvent.of(BrainEvent.Type.PLAYER_JOINED, handler.player.getName().getString() + " joined the game."));
 				}
@@ -296,6 +315,7 @@ public final class ClankerBots {
 
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			Spend.resetSession();
+			announcedPresent = false;
 			restorePending = readSpawnedState(server);
 		});
 

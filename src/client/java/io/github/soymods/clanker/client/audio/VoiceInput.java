@@ -42,6 +42,9 @@ public final class VoiceInput {
 	private static volatile boolean utteranceReady;
 
 	private static boolean pttWasDown;
+	/** Whether the server says a Clanker is in the world; the microphone stays closed when there's no one to talk to. */
+	private static boolean clankerPresent;
+	private static boolean aloneKeyWasDown;
 	private static long cutOffAt;
 	private static int transcribing;
 	private static boolean warnedSilent;
@@ -61,7 +64,15 @@ public final class VoiceInput {
 
 	public static void tick(Minecraft client) {
 		ClientConfig config = ClientConfig.get();
-		boolean inWorld = client.player != null && ClientPlayNetworking.canSend(UtterancePayload.TYPE);
+		boolean connected = client.player != null && ClientPlayNetworking.canSend(UtterancePayload.TYPE);
+		boolean inWorld = connected && clankerPresent;
+		if (connected && !clankerPresent && config.voiceMode != ClientConfig.VoiceMode.OFF) {
+			boolean down = ClankerKeys.pushToTalk.isDown();
+			if (down && !aloneKeyWasDown && client.gui.screen() == null) {
+				hint(client, "There's no Clanker in this world to talk to yet. Spawn one with /clanker spawn.");
+			}
+			aloneKeyWasDown = down;
+		}
 		suppressed = VoicePlayer.speaking();
 		threshold = Microphone.threshold(config.openMicSensitivity);
 
@@ -317,7 +328,12 @@ public final class VoiceInput {
 		client.gui.hud.getChat().addClientSystemMessage(Component.literal("[Clanker] " + text));
 	}
 
+	public static void setClankerPresent(boolean present) {
+		clankerPresent = present;
+	}
+
 	public static void stop() {
+		clankerPresent = false;
 		closeMicrophone();
 	}
 }

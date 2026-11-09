@@ -19,8 +19,8 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Subtitles for Clanker's voice, a "thinking" line while it waits on the model, and a listening indicator for the
- * microphone.
+ * Subtitles for Clanker's voice (bottom centre, like captions), plus small status lines in the bottom-right corner:
+ * the microphone listening or transcribing, and Clanker thinking.
  */
 public final class ClankerHud {
 	private static final Set<Integer> thinking = new HashSet<>();
@@ -67,22 +67,32 @@ public final class ClankerHud {
 			y = start - 4;
 		}
 
+		// Status lines stack up from the bottom-right corner, below where vanilla subtitles start.
+		int corner = graphics.guiHeight() - 14;
+		String mic = VoiceInput.listening() ? "● Listening" : VoiceInput.transcribing() ? "… Understanding" : null;
+		if (mic != null) {
+			corner = status(graphics, font, mic, VoiceInput.listening() ? 0xFFFF5555 : 0xFFCCCCCC, width, corner);
+		}
 		if (config.thinkingIndicator && !thinking.isEmpty()) {
 			for (int id : thinking) {
 				Entity entity = client.level.getEntity(id);
 				if (entity != null) {
 					String dots = ".".repeat((int) (System.currentTimeMillis() / 400 % 3) + 1);
-					graphics.centeredText(font, entity.getName().getString() + " is thinking" + dots, width / 2, y - 10, 0xFFB0B0B0);
-					y -= 12;
+					corner = status(graphics, font, entity.getName().getString() + " is thinking" + dots, 0xFFB0B0B0, width, corner);
 					break;
 				}
 			}
 		}
+	}
 
-		String mic = VoiceInput.listening() ? "● Listening" : VoiceInput.transcribing() ? "… Understanding" : null;
-		if (mic != null) {
-			int color = VoiceInput.listening() ? 0xFFFF5555 : 0xFFCCCCCC;
-			graphics.centeredText(font, mic, width / 2, graphics.guiHeight() / 2 + 14, color);
-		}
+	/** Draws one right-aligned status line and returns where the next one goes. */
+	private static int status(GuiGraphicsExtractor graphics, Font font, String text, int color, int width, int y) {
+		FormattedCharSequence line = Component.literal(text).getVisualOrderText();
+		// Measure with the widest dot count so the line doesn't jitter as the dots change.
+		int textWidth = font.width(text.replaceAll("\\.+$", "..."));
+		int x = width - 4 - textWidth;
+		graphics.fill(x - 3, y - 2, width - 1, y + 10, 0x90000000);
+		graphics.text(font, line, x, y, color, false);
+		return y - 13;
 	}
 }
