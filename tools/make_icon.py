@@ -26,18 +26,6 @@ def rect(x0, y0, x1, y1, c):  # inclusive
             px(x, y, c)
 
 
-# ---- background tile: rounded square, vertical stepped gradient ----
-bands = ['#2b3a55', '#283650', '#25324b', '#222e46', '#1f2a41', '#1c263c', '#192237', '#171f33']
-for y in range(N):
-    c = hexc(bands[min(len(bands) - 1, y * len(bands) // N)])
-    for x in range(N):
-        px(x, y, c)
-# round the corners (radius ~3 px)
-for (cx, cy) in [(0, 0), (N - 1, 0), (0, N - 1), (N - 1, N - 1)]:
-    sx = 1 if cx == 0 else -1
-    sy = 1 if cy == 0 else -1
-    for (dx, dy) in [(0, 0), (1, 0), (2, 0), (0, 1), (0, 2), (1, 1)]:
-        px(cx + sx * dx, cy + sy * dy, (0, 0, 0, 0))
 OUT = hexc('#11151c')
 HI = hexc('#d9dee4')
 LIGHT = hexc('#b4bcc5')
