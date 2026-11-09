@@ -48,23 +48,25 @@ Built each turn as compact text (target 1–3k tokens):
 - Players nearby: name, distance, direction, held item, what block/entity they're looking at
 - Entities nearby: mobs (hostile/passive), dropped items, with distance/direction
 - Notable blocks within ~16 blocks: ores, chests, beds, crafting stations, water, lava, drops/cliffs, doors
+- The wider landscape: eight directions sampled out to ~64 blocks from heightmaps (water, lava, trees, paths, buildings, sand, snow, rock, rising/falling ground), or how far underground it is
 - Current task + progress, and recent events since the last turn
 
 Raw block dumps are never sent.
 
+**Noticing (`Observer`).** Between turns, each bot watches the world the way a player half-pays attention, and turns what it notices into neutral events: other players falling, landing in water/lava/fire, going underground, breaking blocks, gaining or using up items (batched a few seconds after they stop), getting hurt or dying; new hostile mobs, unusual animals, newly exposed ores/structures, biome changes and landscape features coming into view. Each kind is reported once (forgotten after ~10 min), and nothing is reported in the first few seconds after spawning.
+
 ## 5. Brain
 
 - **LLM tool calling.** The model plans and chooses tools; skills execute deterministically over many ticks. The model is never in the per-tick loop.
-- **Turn triggers:**
-  - Someone speaks to it (by name, by proximity, or anyone — configurable)
-  - An event occurs (damage, task finished/failed, time-of-day change, player joins/leaves, item received…)
-  - Idle heartbeat (configurable interval), so it can act or speak unprompted if it wants
+- **Turn triggers — no timers.** Every event carries a weight. Big things (someone talks to it, it gets hurt or dies, a task finishes or fails, a player joins or is in real danger) start a turn right away. Small things (a player mining, a mob appearing, the weather turning, overheard chat) add to an *attention* level that fades with a 45 s half-life; when enough has piled up past the host's Chattiness threshold (Quiet / Normal / Chatty), Clanker takes a turn and can comment or carry on. After a small-talk turn there's a short gap before the next, and small events that sit unanswered for two minutes are dropped. If nothing happens, Clanker says nothing.
 - **Async:** all HTTP runs off the server thread; results are queued back and applied on the next tick.
 - **Memory** (per world, `<world>/clanker/memory-<name>.json`):
-  - Short-term: recent conversation (a rolling summary is still to do)
+  - Short-term: recent conversation; past 60 messages the oldest are folded by the model into a rolling summary ("what happened earlier this session") that stays in the prompt
   - Long-term: a notebook of up to 150 short notes — places, facts about players, goals, whatever it wants — written and crossed out by the model through `remember` / `forget_note`, never by hardcoded rules. The notebook is in every prompt, newest first. `/clanker memory` shows it.
 - **Spend caps:** each response's token usage is priced (built-in table for OpenAI models, custom price in config, local endpoints free) and added to session and daily totals; at a cap the brain stops making requests until the next session/day or the cap is raised.
-- **Providers:** OpenAI (default model `gpt-5-mini`, `reasoning_effort` low for fast replies) and any OpenAI-compatible endpoint (Ollama, OpenRouter, local). Anthropic is planned for a later version via the official Java SDK. Prompt caching where supported.
+- **Providers:** xAI (default model `grok-4.20-0309-non-reasoning`, fast and funny), OpenAI (default `gpt-5-mini`, `reasoning_effort` low) and any OpenAI-compatible endpoint (Ollama, OpenRouter, local). Anthropic is planned via the official Java SDK. Prompt caching where supported.
+- **Personality:** presets (Sarcastic, Deadpan, Overconfident, Chaotic, Wholesome, Grumpy) or a custom description. A preset describes temperament only, never lines or reactions.
+- **Body language:** it turns to look at whoever talks to it and at whoever it answers, when it isn't busy.
 
 ## 6. Skills (tools the model can call)
 
@@ -93,22 +95,24 @@ Ported from **Baritone** (branch `26.2`, local checkout at `~/Desktop/baritone`)
 - Re-paths when the world changes or a movement takes too long; plans the next segment ahead; dangers (lava, long falls) are weighted in costs. Parkour is on (Baritone ships it off).
 - Ported files keep their Baritone license headers plus a note of what changed.
 
-## 8. Voice (client-side, fully local)
+## 8. Voice
 
 - **Speech-to-text:** whisper.cpp via JNI, bundled natives (Windows x64, macOS arm64/x64; Linux free). Models `tiny` / `base` (default) / `small`, downloaded on first run. Thread-capped so it doesn't hurt FPS.
-- **Text-to-speech:** Piper neural voices (~60 MB each); each player picks the voice they hear. Piper's natives (~80 MB) are too big for the mod jar, so they're downloaded from Maven Central (checksum pinned) along with the models, only when the player presses Download.
+- **Text-to-speech, host cloud voice (default when a key is set):** the host voices each line with xAI TTS (default voice `rex`, ~$15 per million characters) or ElevenLabs (`eleven_v3`, the most expressive, ~$0.08 per 1,000 characters) and streams 24 kHz PCM to nearby players in ~100 ms chunks, so everyone hears the same voice and playback starts after ~0.3 s of buffered audio. The model can write voice cues — `[laugh]`, `[sigh]`, `[gasp]`, `<whisper>…</whisper>`, `<loud>`, `<slow>`, … — which are translated for the chosen service and stripped from chat and subtitles. Lines are voiced one at a time in order; talking over Clanker cancels the rest. Voice spend counts toward the same caps. If the service fails or a cap is hit, it backs off and lines fall back to each player's local voice.
+- **Text-to-speech, local fallback:** Piper neural voices (~60 MB each); each player picks the voice they hear. Piper's natives (~80 MB) are too big for the mod jar, so they're downloaded from Maven Central (checksum pinned) along with the models, only when the player presses Download.
 - **Positional playback:** a streaming sound instance in Minecraft's own sound engine (Fabric's custom-stream hook), moved to the bot every tick — voice comes from Clanker, falls off with distance, and follows the Voice/Speech volume slider.
 - **Mic modes:** push-to-talk (default **V**), open mic with voice activity detection, off.
 - **Echo protection:** mic input is ignored while Clanker is speaking, and transcripts matching its recent speech are dropped.
 - **Subtitles** and a "thinking" indicator above Clanker's head.
-- **Network carries text only.** Client transcribes → sends text to server. Server sends text → each client synthesizes locally.
+- **Network:** the client sends transcribed text to the server. The server sends each line as text plus, when the host voices it, a line id and the audio stream for it; otherwise each client synthesizes locally.
 - **Mic permission handling:** detects a silent mic and shows an in-game hint (macOS: official launcher lacks mic permission, Prism Launcher works; Windows: "let desktop apps access your microphone").
 
 ```
 CLIENT (each player)                       SERVER (host)
 mic ─► PTT / VAD ─► Whisper ─► text ──────► Brain ─► LLM API   (only cloud piece)
                                               │
-speaker ◄─ OpenAL @ bot pos ◄─ Piper ◄─ text ◄┘     + perception, skills, fake player
+speaker ◄─ OpenAL @ bot pos ◄─ PCM stream ◄──┤◄── xAI / ElevenLabs TTS (host, optional)
+                         └◄─ Piper ◄─ text ◄┘     + perception, skills, fake player
 ```
 
 ## 9. Multiplayer
@@ -138,10 +142,11 @@ Custom screen built from vanilla widgets (no config-library dependency). Opens v
 **Server (host/op only)**
 - Provider, model, API key, custom endpoint
   - The key is pasted into a masked field. It travels once from the op's client to the server, is saved in `config/clanker-server.json`, and is never sent back to any client: the screen only shows whether a key is set.
-  - Also accepted from the `CLANKER_API_KEY` env var or `~/.clanker/api-key.txt` (handy for dedicated servers and dev).
+  - Also accepted from env vars or files in `~/.clanker/`: `CLANKER_API_KEY` / `api-key.txt` (OpenAI or a compatible endpoint), `CLANKER_XAI_API_KEY` / `xai-key.txt`, `CLANKER_ELEVENLABS_API_KEY` / `elevenlabs-key.txt`.
 - Bot name, skin
-- Personality
-- Idle interval, listening mode, owner
+- Personality (preset or custom), Chattiness (quiet / normal / chatty)
+- Clanker's voice: xAI (voice, speed), ElevenLabs (voice id, model, speed), or each player's local voice; its key (masked, same rules)
+- Listening mode, owner
 - Permissions, spend caps
 
 ## 12. Commands
@@ -202,7 +207,8 @@ Files on disk:
 | **0.3** | Crafting, smelting, containers, placing, combat, eating, sleeping, armor, block/attack permissions — *done*; Anthropic provider still to do |
 | **0.4** | Voice: Whisper STT, Piper TTS, positional audio, push-to-talk — *done* |
 | **0.5** | Full settings screens (voice, display, permissions), open mic, spend caps, memory — *done* |
-| **1.0** | Personalities, debug tools, polish, Modrinth release |
+| **0.6** | Companion pass: event weights and attention instead of an idle timer, noticing players and the world, landscape perception, personality presets, host cloud voice (xAI / ElevenLabs) with voice cues, rolling summary, xAI brain, looking at speakers — *done*; ElevenLabs untested against the live service |
+| **1.0** | Debug tools, polish, Modrinth release |
 | Later | Building from descriptions, multiple Clankers, vision model screenshots |
 
 ## 16. Toolchain

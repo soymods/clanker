@@ -32,8 +32,18 @@ import java.util.regex.Pattern;
  */
 public class Brain {
 	public static final String DEFAULT_OPENAI_MODEL = "gpt-5-mini";
+	public static final String DEFAULT_XAI_MODEL = "grok-4.20-0309-non-reasoning";
 
-	private static final int MAX_HISTORY = 40;
+	/** Past this many messages, the oldest are folded into the running summary. */
+	private static final int MAX_HISTORY = 60;
+	private static final int SUMMARIZE_AT_LEAST = 24;
+	/** Dropped outright past this, e.g. while a summary request is still out. */
+	private static final int HARD_MAX_HISTORY = 100;
+	/** Small noticed things fade from attention with this half-life. */
+	private static final long ATTENTION_HALF_LIFE_MS = 45_000;
+	/** Small things this old are dropped instead of being brought up in a later turn. */
+	private static final long STALE_SMALL_EVENT_MS = 120_000;
+	private static final double LOOK_AT_SPEAKER_RANGE = 16;
 	private static final int MAX_PENDING = 30;
 	private static final int MAX_TOOL_ROUNDS = 3;
 	private static final long SPEECH_COOLDOWN_MS = 300;
@@ -51,6 +61,7 @@ public class Brain {
 	private final List<BrainEvent> pending = new ArrayList<>();
 	private final Map<UUID, Long> conversation = new HashMap<>();
 	private LlmProvider providerOverride;
+	private LlmProvider summaryProviderOverride;
 	private ServerConfig capConfig;
 
 	private boolean inFlight;
@@ -58,8 +69,17 @@ public class Brain {
 	private int generation;
 	private int toolRounds;
 	private long lastTurnEnd;
-	private long lastActivity = System.currentTimeMillis();
+	/** When a turn that small things started last ended. */
+	private long lastSmallTurnEnd;
+	private boolean turnIsSmall;
+	/** Weight of small things noticed since the last turn, fading over time. */
+	private double attention;
+	private long attentionAt;
 	private long lastNotice;
+	private String summary = "";
+	private boolean summarizing;
+	/** Who last talked to Clanker, to face while answering. */
+	private UUID lastSpeaker;
 	private List<BrainEvent> turnEvents = List.of();
 	private int turnStartHistorySize;
 	private int errorStreak;
@@ -106,9 +126,21 @@ public class Brain {
 		if (pending.size() > MAX_PENDING) {
 			pending.removeIf(e -> e != event && e.type() != BrainEvent.Type.SPEECH && pending.size() > MAX_PENDING);
 		}
-		if (event.type().triggersTurn) {
-			lastActivity = event.timeMillis();
+		fadeAttention(event.timeMillis());
+		attention += event.weight();
+	}
+
+	private void fadeAttention(long now) {
+		if (attentionAt > 0 && now > attentionAt) {
+			attention *= Math.pow(0.5, (double) (now - attentionAt) / ATTENTION_HALF_LIFE_MS);
 		}
+		attentionAt = Math.max(attentionAt, now);
+	}
+
+	/** How much small stuff has caught Clanker's attention since its last turn, for tests and the debug HUD. */
+	public double attention() {
+		fadeAttention(System.currentTimeMillis());
+		return attention;
 	}
 
 	/** A player said something, typed or spoken. */
@@ -134,12 +166,15 @@ public class Brain {
 		if (addressed) {
 			// Being spoken to mid-thought: drop the request and think again with everything that's been said.
 			abandonRequest();
+			lastSpeaker = speaker.getUUID();
+			face(speaker);
 		}
 		// Stopping never waits for the model.
 		if (addressed && STOP_WORD.matcher(text).find() && bot.tasks().stop()) {
 			post(BrainEvent.of(BrainEvent.Type.NOTE, "Your current task was cancelled because " + who + " said stop."));
 		}
 		if (cutOff) {
+			bot.voice().cancel();
 			post(BrainEvent.of(BrainEvent.Type.NOTE, who + " started talking while you were still speaking, so they didn't hear the rest of what you said."));
 		}
 		post(BrainEvent.of(addressed ? BrainEvent.Type.SPEECH : BrainEvent.Type.OVERHEARD,
@@ -231,19 +266,23 @@ public class Brain {
 			}
 			return;
 		}
-		int idleSeconds = ServerConfig.get().idleSeconds;
-		if (idleSeconds > 0 && pending.isEmpty() && humansOnline() && now - lastActivity > idleSeconds * 1000L) {
-			post(BrainEvent.of(BrainEvent.Type.IDLE, "Nothing new has happened for " + (now - lastActivity) / 1000 + " seconds."));
-		}
+		// Small things that were never worth a turn don't get brought up minutes later.
+		pending.removeIf(e -> !e.triggersTurn() && e.type() != BrainEvent.Type.SPEECH && now - e.timeMillis() > STALE_SMALL_EVENT_MS);
 		boolean speech = false;
-		boolean trigger = false;
+		boolean big = false;
 		for (BrainEvent event : pending) {
 			speech |= event.type() == BrainEvent.Type.SPEECH;
-			trigger |= event.type().triggersTurn;
+			big |= event.triggersTurn();
 		}
-		if (!trigger || now - lastTurnEnd < (speech ? SPEECH_COOLDOWN_MS : EVENT_COOLDOWN_MS) || now < retryAt) {
+		// No timers: a turn happens because something did. Small things only count once enough of them pile up.
+		ServerConfig.Talkativeness talk = ServerConfig.get().talkativeness;
+		fadeAttention(now);
+		boolean small = !big && !pending.isEmpty() && attention >= talk.threshold
+				&& now - lastSmallTurnEnd >= talk.smallTalkGapMs && humansOnline();
+		if (!(big || small) || now - lastTurnEnd < (speech ? SPEECH_COOLDOWN_MS : EVENT_COOLDOWN_MS) || now < retryAt) {
 			return;
 		}
+		turnIsSmall = !big;
 		startTurn(self, now);
 	}
 
@@ -277,16 +316,17 @@ public class Brain {
 		LlmProvider provider = provider();
 		if (provider == null) {
 			pending.clear();
+			attention = 0;
 			lastTurnEnd = now;
-			lastActivity = now;
 			notice(Component.literal("[Clanker] No API key is set, so " + bot.name() + " can't think yet. Add one with /clanker config."), false);
 			return;
 		}
+		trimHistory(provider);
 		turnStartHistorySize = history.size();
 		turnEvents = List.copyOf(pending);
 		history.add(ChatMessage.user(formatEvents(now), Perception.snapshot(bot, self)));
 		pending.clear();
-		trimHistory();
+		attention = 0;
 		toolRounds = 0;
 		send(provider);
 	}
@@ -300,7 +340,8 @@ public class Brain {
 		requestStartedAt = System.currentTimeMillis();
 		firstTextAt = 0;
 		ServerConfig config = ServerConfig.get();
-		LlmRequest request = new LlmRequest(Prompts.system(bot.name(), config.personality, bot.memory().promptSection()), List.copyOf(history), Tools.specs(config));
+		LlmRequest request = new LlmRequest(Prompts.system(bot.name(), config.personality, bot.memory().promptSection(), summary),
+				List.copyOf(history), Tools.specs(config));
 		// Text pieces and the finished reply both hop to the server thread in the order they arrived.
 		provider.complete(request, piece -> bot.server().execute(() -> {
 			if (requestGeneration == generation && !shutdown) {
@@ -334,6 +375,9 @@ public class Brain {
 			Clanker.LOGGER.info("{} started answering {} {}s after hearing them", bot.name(), heardFrom, seconds(System.currentTimeMillis() - heardAt));
 			heardAt = 0;
 		}
+		if (lastSpeaker != null && bot.server().getPlayerList().getPlayer(lastSpeaker) instanceof ServerPlayer listener) {
+			face(listener);
+		}
 		bot.say(text);
 		spokenThisRequest.append(text).append(' ');
 	}
@@ -342,11 +386,22 @@ public class Brain {
 		return String.format(java.util.Locale.ROOT, "%.2f", millis / 1000.0);
 	}
 
+	/** Turns to look at someone nearby while talking with them, unless busy with a task that aims somewhere itself. */
+	private void face(ServerPlayer player) {
+		ClankerPlayer self = bot.player();
+		if (self != null && bot.tasks().current() == null && player != self && player.level() == self.level()
+				&& player.distanceTo(self) <= LOOK_AT_SPEAKER_RANGE) {
+			bot.movement().lookAt(player);
+		}
+	}
+
 	private void onResponse(LlmProvider provider, LlmResponse response, Throwable error) {
 		inFlight = false;
 		long now = System.currentTimeMillis();
 		lastTurnEnd = now;
-		lastActivity = now;
+		if (turnIsSmall) {
+			lastSmallTurnEnd = now;
+		}
 		if (error != null) {
 			Clanker.LOGGER.info("{} model request failed after {}s", bot.name(), seconds(now - requestStartedAt));
 			onError(error instanceof CompletionException && error.getCause() != null ? error.getCause() : error);
@@ -441,14 +496,80 @@ public class Brain {
 		return out.toString().strip();
 	}
 
-	private void trimHistory() {
-		while (history.size() > MAX_HISTORY) {
+	/**
+	 * Keeps the history short: past {@link #MAX_HISTORY}, the oldest turns are folded into a running summary (written by
+	 * the model in the background), so running jokes and plans outlive the raw messages.
+	 */
+	private void trimHistory(LlmProvider provider) {
+		if (history.size() > MAX_HISTORY && !summarizing) {
+			int cut = -1;
+			for (int i = SUMMARIZE_AT_LEAST; i < history.size(); i++) {
+				if (history.get(i).role() == ChatMessage.Role.USER) {
+					cut = i;
+					break;
+				}
+			}
+			if (cut > 0) {
+				List<ChatMessage> old = new ArrayList<>(history.subList(0, cut));
+				history.subList(0, cut).clear();
+				summarize(summaryProviderOverride != null ? summaryProviderOverride : provider, old);
+			}
+		}
+		while (history.size() > HARD_MAX_HISTORY) {
 			history.removeFirst();
 			// Never start the history with an orphaned assistant reply or tool result.
 			while (!history.isEmpty() && history.getFirst().role() != ChatMessage.Role.USER) {
 				history.removeFirst();
 			}
 		}
+	}
+
+	private void summarize(LlmProvider provider, List<ChatMessage> old) {
+		StringBuilder transcript = new StringBuilder();
+		for (ChatMessage message : old) {
+			switch (message.role()) {
+				case USER -> transcript.append(message.content()).append('\n');
+				case ASSISTANT -> {
+					if (message.content() != null && !message.content().isBlank()) {
+						transcript.append("You said: ").append(message.content().strip()).append('\n');
+					}
+					for (ToolCall call : message.toolCalls()) {
+						transcript.append("You used ").append(call.name()).append(' ').append(call.arguments()).append('\n');
+					}
+				}
+				case TOOL -> transcript.append("Result: ").append(abbreviate(message.content())).append('\n');
+			}
+		}
+		String input = (summary.isBlank() ? "No previous recollection." : "Previous recollection:\n" + summary)
+				+ "\n\nOldest part of the conversation:\n" + transcript.toString().strip();
+		summarizing = true;
+		int requestGeneration = generation;
+		provider.complete(new LlmRequest(Prompts.SUMMARIZER, List.of(ChatMessage.user(input, null)), List.of()))
+				.whenComplete((response, error) -> bot.server().execute(() -> {
+					summarizing = false;
+					if (response != null) {
+						recordUsage(response);
+					}
+					if (requestGeneration != generation && history.isEmpty()) {
+						return; // the conversation was cleared meanwhile
+					}
+					if (error != null) {
+						Clanker.LOGGER.warn("{} couldn't summarize older conversation: {}", bot.name(), error.getMessage());
+					} else if (!response.text().isBlank()) {
+						summary = response.text().strip();
+						Clanker.LOGGER.info("{} summarized {} older messages", bot.name(), old.size());
+					}
+				}));
+	}
+
+	/** The running summary of conversation that's no longer in the history. */
+	public String summary() {
+		return summary;
+	}
+
+	/** Uses this provider for summaries instead of the turn provider, for tests. */
+	public void setSummaryProviderOverride(LlmProvider provider) {
+		this.summaryProviderOverride = provider;
 	}
 
 	private boolean humansOnline() {
@@ -461,8 +582,19 @@ public class Brain {
 	}
 
 	private String currentModel() {
-		ServerConfig config = ServerConfig.get();
-		return config.model.isBlank() && config.provider == ServerConfig.Provider.OPENAI ? DEFAULT_OPENAI_MODEL : config.model;
+		return currentModel(ServerConfig.get());
+	}
+
+	/** The model the config asks for, with the provider's default filled in. */
+	public static String currentModel(ServerConfig config) {
+		if (!config.model.isBlank()) {
+			return config.model;
+		}
+		return switch (config.provider) {
+			case OPENAI -> DEFAULT_OPENAI_MODEL;
+			case XAI -> DEFAULT_XAI_MODEL;
+			case OPENAI_COMPATIBLE -> "";
+		};
 	}
 
 	private LlmProvider provider() {
@@ -473,7 +605,9 @@ public class Brain {
 		String key = config.resolveApiKey();
 		return switch (config.provider) {
 			case OPENAI -> key.isBlank() ? null
-					: new OpenAiProvider(OpenAiProvider.OPENAI_BASE_URL, key, config.model.isBlank() ? DEFAULT_OPENAI_MODEL : config.model, config.reasoningEffort);
+					: new OpenAiProvider(OpenAiProvider.OPENAI_BASE_URL, key, currentModel(config), config.reasoningEffort);
+			case XAI -> key.isBlank() ? null
+					: new OpenAiProvider(OpenAiProvider.XAI_BASE_URL, key, currentModel(config), config.reasoningEffort);
 			case OPENAI_COMPATIBLE -> config.endpoint.isBlank() || config.model.isBlank() ? null
 					: new OpenAiProvider(config.endpoint, key, config.model, config.reasoningEffort);
 		};
@@ -483,6 +617,7 @@ public class Brain {
 	public void resetBackoff() {
 		errorStreak = 0;
 		retryAt = 0;
+		bot.voice().resetBackoff();
 	}
 
 	/** Forget the conversation (not long-term memory, which arrives in 0.5). */
@@ -491,12 +626,15 @@ public class Brain {
 		inFlight = false;
 		history.clear();
 		pending.clear();
+		summary = "";
+		attention = 0;
 	}
 
 	public void shutdown() {
 		shutdown = true;
 		generation++;
 		inFlight = false;
+		bot.voice().shutdown();
 	}
 
 	public boolean isThinking() {

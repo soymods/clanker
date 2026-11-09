@@ -20,6 +20,10 @@ import net.minecraft.world.phys.Vec3;
 public class ClankerClientGameTests implements FabricClientGameTest {
 	private static final String TEST_KEY = "sk-test-not-a-real-key";
 
+	static {
+		TestSetup.isolate();
+	}
+
 	@Override
 	public void runTest(ClientGameTestContext context) {
 		try (TestSingleplayerContext singleplayer = context.worldBuilder().create()) {
@@ -31,6 +35,7 @@ public class ClankerClientGameTests implements FabricClientGameTest {
 				Vec3 pos = host.position().add(host.getLookAngle().multiply(1, 0, 1).normalize().scale(4));
 				try {
 					ClankerBot bot = ClankerBots.spawn(server, host.level(), pos, host.getYRot() + 180, 0, "Clanker");
+					bot.voice().setLocalOnly(true);
 					bot.brain().setProviderOverride(FakeProvider.silent());
 					return bot.player().blockPosition();
 				} catch (ClankerBots.SpawnException e) {
@@ -79,11 +84,18 @@ public class ClankerClientGameTests implements FabricClientGameTest {
 			clickWidget(context, "Attack players");
 			context.clickScreenButton("Back");
 
+			// Clanker's voice (host), then this player's own mic and speakers from there.
 			context.clickScreenButton("Voice…");
+			context.waitFor(client -> client.gui.screen() instanceof io.github.soymods.clanker.client.gui.ClankerHostVoiceScreen);
+			context.takeScreenshot("clanker-host-voice");
+			context.clickScreenButton("Your mic and speakers…");
 			context.waitFor(client -> client.gui.screen() instanceof io.github.soymods.clanker.client.gui.ClankerVoiceScreen);
 			context.takeScreenshot("clanker-voice-settings");
 			context.clickScreenButton("Done");
+			context.waitFor(client -> client.gui.screen() instanceof io.github.soymods.clanker.client.gui.ClankerHostVoiceScreen);
+			context.clickScreenButton("Back");
 			context.waitFor(client -> apiKeyField(client.gui.screen()) != null);
+			context.takeScreenshot("clanker-settings-main");
 
 			context.clickScreenButton("Remove key");
 			context.clickScreenButton("Save");

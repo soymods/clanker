@@ -1,5 +1,6 @@
 package io.github.soymods.clanker.client.gui;
 
+import io.github.soymods.clanker.config.Personalities;
 import io.github.soymods.clanker.network.HostSettings;
 import io.github.soymods.clanker.network.SettingsPayload;
 import io.github.soymods.clanker.network.SignalPayload;
@@ -13,6 +14,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.Style;
 import net.minecraft.util.FormattedCharSequence;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -23,7 +25,8 @@ public class ClankerSettingsScreen extends Screen {
 	private static final int COLUMN_WIDTH = 150;
 	private static final int GAP = 10;
 	private static final int ROW = 32; // fits the 854x480 minimum window at GUI scale 2
-	private static final List<String> PROVIDERS = List.of("OPENAI", "OPENAI_COMPATIBLE");
+	private static final List<String> PROVIDERS = List.of("OPENAI", "XAI", "OPENAI_COMPATIBLE");
+	private static final List<String> TALKATIVENESS = List.of("QUIET", "NORMAL", "CHATTY");
 	private static final List<String> LISTEN_MODES = List.of("NAME_ONLY", "NEARBY", "EVERYONE");
 	private static final List<String> EFFORTS = List.of("", "none", "minimal", "low", "medium", "high");
 
@@ -32,7 +35,6 @@ public class ClankerSettingsScreen extends Screen {
 	private String status = "";
 	private boolean clearKeyRequested;
 	private String pendingKey = "";
-	private String pendingIdle;
 
 	private CycleButton<String> provider;
 	private EditBox model;
@@ -41,7 +43,8 @@ public class ClankerSettingsScreen extends Screen {
 	private EditBox apiKey;
 	private EditBox botName;
 	private CycleButton<String> listenMode;
-	private EditBox idleSeconds;
+	private CycleButton<String> talkativeness;
+	private CycleButton<String> preset;
 	private EditBox personality;
 
 	public ClankerSettingsScreen(Screen parent) {
@@ -55,7 +58,6 @@ public class ClankerSettingsScreen extends Screen {
 		this.status = settings.status;
 		this.clearKeyRequested = false;
 		this.pendingKey = "";
-		this.pendingIdle = null;
 		rebuildWidgets();
 	}
 
@@ -80,11 +82,10 @@ public class ClankerSettingsScreen extends Screen {
 			return;
 		}
 
-		provider = addRenderableWidget(CycleButton.builder(ClankerSettingsScreen::providerLabel, settings.provider)
+		provider = addRenderableWidget(CycleButton.builder(ClankerSettingsScreen::providerLabel, PROVIDERS.contains(settings.provider) ? settings.provider : "OPENAI")
 				.withValues(PROVIDERS)
 				.create(left, top + 12, COLUMN_WIDTH, 20, Component.literal("Provider"), (button, value) -> updateEndpointState()));
 		model = field(left, top + ROW, "Model", settings.model, 100);
-		model.setHint(Component.literal(settings.defaultModel.isEmpty() ? "model name" : "default: " + settings.defaultModel));
 		endpoint = field(left, top + ROW * 2, "Endpoint (OpenAI-compatible)", settings.endpoint, 300);
 		endpoint.setHint(Component.literal("http://localhost:11434/v1"));
 		effort = addRenderableWidget(CycleButton.builder(ClankerSettingsScreen::effortLabel, EFFORTS.contains(settings.reasoningEffort) ? settings.reasoningEffort : "")
@@ -92,17 +93,35 @@ public class ClankerSettingsScreen extends Screen {
 				.create(left, top + ROW * 3 + 12, COLUMN_WIDTH, 20, Component.literal("Reasoning")));
 
 		apiKey = field(right, top, "API key", pendingKey, 500);
-		apiKey.setHint(Component.literal(settings.keySet ? "set (" + settings.keySource + ")" : "paste your key"));
 		apiKey.addFormatter((text, offset) -> FormattedCharSequence.forward("•".repeat(text.length()), Style.EMPTY));
 		botName = field(right, top + ROW, "Bot name", settings.botName, 16);
 		listenMode = addRenderableWidget(CycleButton.builder(ClankerSettingsScreen::listenLabel, settings.listenMode)
 				.withValues(LISTEN_MODES)
 				.create(right, top + ROW * 2 + 12, COLUMN_WIDTH, 20, Component.literal("Listens to")));
-		idleSeconds = field(right, top + ROW * 3, "Idle seconds (0 = off)", pendingIdle != null ? pendingIdle : Integer.toString(settings.idleSeconds), 4);
+		talkativeness = addRenderableWidget(CycleButton.builder(ClankerSettingsScreen::talkLabel,
+						TALKATIVENESS.contains(settings.talkativeness) ? settings.talkativeness : "NORMAL")
+				.withValues(TALKATIVENESS)
+				.create(right, top + ROW * 3 + 12, COLUMN_WIDTH, 20, Component.literal("Chattiness")));
 
-		personality = field(left, top + ROW * 4, "Personality", settings.personality, 1000);
-		personality.setWidth(COLUMN_WIDTH * 2 + GAP);
-		personality.setHint(Component.literal("e.g. sarcastic but loyal, loves building, scared of caves"));
+		List<String> presets = new ArrayList<>(Personalities.PRESETS.keySet());
+		presets.add("Custom");
+		preset = addRenderableWidget(CycleButton.builder(Component::literal, Personalities.presetName(settings.personality))
+				.withValues(presets)
+				.create(left, top + ROW * 4 + 12, COLUMN_WIDTH, 20, Component.literal("Personality"), (button, value) -> {
+					if (!value.equals("Custom")) {
+						personality.setValue(Personalities.PRESETS.get(value));
+						personality.moveCursorToStart(false);
+					}
+				}));
+		personality = field(right, top + ROW * 4, "Personality description", Personalities.resolve(settings.personality), 1000);
+		personality.moveCursorToStart(false);
+		personality.setHint(Component.literal("e.g. sarcastic but loyal, scared of caves"));
+		personality.setResponder(text -> {
+			String name = Personalities.presetName(text);
+			if (preset != null && !name.equals(preset.getValue())) {
+				preset.setValue(name);
+			}
+		});
 
 		int bottom = top + ROW * 5 + 4;
 		Component statusText = Component.literal(!settings.canEdit ? "Only operators or the world's host can change these."
@@ -123,7 +142,7 @@ public class ClankerSettingsScreen extends Screen {
 		}).bounds(left + step, buttonsY, buttonWidth, 20).build());
 		addRenderableWidget(Button.builder(Component.literal("Voice…"), b -> {
 			keepEdits();
-			minecraft.gui.setScreen(new ClankerVoiceScreen(this));
+			minecraft.gui.setScreen(new ClankerHostVoiceScreen(this, settings));
 		}).bounds(left + step * 2, buttonsY, buttonWidth, 20).build());
 		Button save = addRenderableWidget(Button.builder(Component.literal("Save"), b -> save())
 				.bounds(left + step * 3, buttonsY, buttonWidth, 20).build());
@@ -131,7 +150,7 @@ public class ClankerSettingsScreen extends Screen {
 				.bounds(left + step * 4, buttonsY, buttonWidth, 20).build());
 
 		if (!settings.canEdit) {
-			for (var widget : List.of(provider, model, endpoint, effort, apiKey, botName, listenMode, idleSeconds, personality, clearKey, save)) {
+			for (var widget : List.of(provider, model, endpoint, effort, apiKey, botName, listenMode, talkativeness, preset, personality, clearKey, save)) {
 				widget.active = false;
 			}
 		}
@@ -154,7 +173,13 @@ public class ClankerSettingsScreen extends Screen {
 
 	private void updateEndpointState() {
 		if (endpoint != null && provider != null) {
-			endpoint.setEditable(settings.canEdit && "OPENAI_COMPATIBLE".equals(provider.getValue()));
+			String chosen = provider.getValue();
+			endpoint.setEditable(settings.canEdit && "OPENAI_COMPATIBLE".equals(chosen));
+			String defaultModel = settings.defaultModels.getOrDefault(chosen, "");
+			model.setHint(Component.literal(defaultModel.isEmpty() ? "model name" : "default: " + defaultModel));
+			String source = settings.keySources.getOrDefault("XAI".equals(chosen) ? "XAI" : "OPENAI", "");
+			apiKey.setHint(Component.literal(clearKeyRequested ? "will be removed" : !source.isEmpty() ? "set (" + source + ")"
+					: "XAI".equals(chosen) ? "paste an xAI key" : "paste your key"));
 		}
 	}
 
@@ -167,8 +192,8 @@ public class ClankerSettingsScreen extends Screen {
 		settings.botName = botName.getValue();
 		settings.personality = personality.getValue();
 		settings.listenMode = listenMode.getValue();
+		settings.talkativeness = talkativeness.getValue();
 		pendingKey = apiKey.getValue();
-		pendingIdle = idleSeconds.getValue();
 	}
 
 	private void save() {
@@ -187,13 +212,16 @@ public class ClankerSettingsScreen extends Screen {
 		update.botName = botName.getValue();
 		update.personality = personality.getValue();
 		update.listenMode = listenMode.getValue();
-		try {
-			update.idleSeconds = Integer.parseInt(idleSeconds.getValue().strip());
-		} catch (NumberFormatException e) {
-			status = "Idle seconds must be a whole number.";
-			rebuildWidgets();
-			return;
-		}
+		update.talkativeness = talkativeness.getValue();
+		update.voiceProvider = settings.voiceProvider;
+		update.xaiVoice = settings.xaiVoice;
+		update.elevenLabsVoice = settings.elevenLabsVoice;
+		update.elevenLabsModel = settings.elevenLabsModel;
+		update.voiceSpeed = settings.voiceSpeed;
+		update.newVoiceKey = settings.newVoiceKey;
+		update.clearVoiceKey = settings.clearVoiceKey;
+		settings.newVoiceKey = "";
+		settings.clearVoiceKey = false;
 		update.newApiKey = apiKey.getValue();
 		update.clearApiKey = clearKeyRequested;
 		apiKey.setValue("");
@@ -210,6 +238,7 @@ public class ClankerSettingsScreen extends Screen {
 	private static Component providerLabel(String value) {
 		return Component.literal(switch (value) {
 			case "OPENAI" -> "OpenAI";
+			case "XAI" -> "xAI (Grok)";
 			case "OPENAI_COMPATIBLE" -> "OpenAI-compatible";
 			default -> value;
 		});
@@ -221,6 +250,14 @@ public class ClankerSettingsScreen extends Screen {
 			case "NEARBY" -> "Anyone nearby";
 			case "EVERYONE" -> "Everyone";
 			default -> value;
+		});
+	}
+
+	private static Component talkLabel(String value) {
+		return Component.literal(switch (value) {
+			case "QUIET" -> "Quiet";
+			case "CHATTY" -> "Chatty";
+			default -> "Normal";
 		});
 	}
 

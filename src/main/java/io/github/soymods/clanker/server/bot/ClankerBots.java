@@ -9,6 +9,7 @@ import io.github.soymods.clanker.server.brain.BrainEvent;
 import io.github.soymods.clanker.server.brain.Spend;
 import io.github.soymods.clanker.server.perception.Perception;
 import net.fabricmc.fabric.api.entity.event.v1.EntitySleepEvents;
+import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -202,6 +203,11 @@ public final class ClankerBots {
 		});
 
 		ServerLivingEntityEvents.AFTER_DAMAGE.register((entity, source, baseDamage, damageTaken, blocked) -> {
+			if (entity instanceof ServerPlayer other && !(other instanceof ClankerPlayer) && damageTaken > 0) {
+				for (ClankerBot bot : BOTS.values()) {
+					bot.observer().playerHurt(other, describe(source), damageTaken);
+				}
+			}
 			if (entity instanceof ClankerPlayer player && damageTaken > 0) {
 				ClankerBot bot = BOTS.get(player.getUUID());
 				if (bot != null) {
@@ -212,12 +218,30 @@ public final class ClankerBots {
 		});
 
 		ServerLivingEntityEvents.AFTER_DEATH.register((entity, source) -> {
+			if (entity instanceof ServerPlayer other && !(other instanceof ClankerPlayer)) {
+				String message = other.getCombatTracker().getDeathMessage().getString();
+				for (ClankerBot bot : BOTS.values()) {
+					ClankerPlayer self = bot.player();
+					if (self != null && self.level() == other.level() && self.distanceTo(other) <= 96) {
+						bot.brain().post(BrainEvent.of(BrainEvent.Type.PLAYER_ACTIVITY, other.getName().getString() + " died: " + message
+								+ " (" + Perception.blocks(self.distanceTo(other)) + " " + Perception.direction(self.position(), other.position()) + ").", 1));
+					}
+				}
+			}
 			if (entity instanceof ClankerPlayer player) {
 				ClankerBot bot = BOTS.get(player.getUUID());
 				if (bot != null) {
 					bot.tasks().stop();
 					bot.brain().post(BrainEvent.of(BrainEvent.Type.DEATH, "You died: " + player.getCombatTracker().getDeathMessage().getString()
 							+ " at " + Perception.coords(player.position()) + "."));
+				}
+			}
+		});
+
+		PlayerBlockBreakEvents.AFTER.register((level, breaker, pos, state, blockEntity) -> {
+			if (breaker instanceof ServerPlayer other && !(other instanceof ClankerPlayer)) {
+				for (ClankerBot bot : BOTS.values()) {
+					bot.observer().playerBrokeBlock(other, state);
 				}
 			}
 		});

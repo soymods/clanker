@@ -72,6 +72,10 @@ public final class Perception {
 		Task task = bot.tasks().current();
 		out.append("Current task: ").append(task == null ? "none" : task.describe(bot, self)).append('\n');
 
+		String view = Landscape.look(level, self.blockPosition()).text();
+		if (!view.isEmpty()) {
+			out.append(view).append('\n');
+		}
 		appendPlayers(out, self);
 		appendEntities(out, self);
 		appendBlocks(out, self);
@@ -138,10 +142,26 @@ public final class Perception {
 		out.append("Entities nearby:").append(lines.isEmpty() ? " none\n" : "\n" + String.join("\n", lines) + "\n");
 	}
 
-	private record BlockSighting(int count, double nearest, BlockPos nearestPos) {
+	/** Notable blocks of one kind within reach of Clanker's senses. */
+	public record BlockSighting(String name, int count, double nearest, BlockPos nearestPos) {
 	}
 
 	private static void appendBlocks(StringBuilder out, ClankerPlayer self) {
+		List<BlockSighting> sightings = sightings(self);
+		List<String> lines = new ArrayList<>();
+		for (BlockSighting s : sightings) {
+			if (lines.size() >= MAX_BLOCK_KINDS) {
+				break;
+			}
+			lines.add("- " + s.name() + " x" + s.count() + ", nearest " + blocks(s.nearest()) + " "
+					+ direction(self.position(), Vec3.atCenterOf(s.nearestPos())) + " at " + coords(s.nearestPos()));
+		}
+		out.append("Notable blocks within ").append(BLOCK_RADIUS).append(":")
+				.append(lines.isEmpty() ? " none\n" : "\n" + String.join("\n", lines) + "\n");
+	}
+
+	/** Notable blocks around Clanker, nearest kind first. */
+	public static List<BlockSighting> sightings(ClankerPlayer self) {
 		ServerLevel level = self.level();
 		BlockPos origin = self.blockPosition();
 		Map<String, BlockSighting> seen = new TreeMap<>();
@@ -160,28 +180,18 @@ public final class Perception {
 					double distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
 					BlockSighting previous = seen.get(name);
 					if (previous == null) {
-						seen.put(name, new BlockSighting(1, distance, pos.immutable()));
+						seen.put(name, new BlockSighting(name, 1, distance, pos.immutable()));
 					} else if (distance < previous.nearest()) {
-						seen.put(name, new BlockSighting(previous.count() + 1, distance, pos.immutable()));
+						seen.put(name, new BlockSighting(name, previous.count() + 1, distance, pos.immutable()));
 					} else {
-						seen.put(name, new BlockSighting(previous.count() + 1, previous.nearest(), previous.nearestPos()));
+						seen.put(name, new BlockSighting(name, previous.count() + 1, previous.nearest(), previous.nearestPos()));
 					}
 				}
 			}
 		}
-		List<Map.Entry<String, BlockSighting>> entries = new ArrayList<>(seen.entrySet());
-		entries.sort(Comparator.comparingDouble(e -> e.getValue().nearest()));
-		List<String> lines = new ArrayList<>();
-		for (Map.Entry<String, BlockSighting> entry : entries) {
-			if (lines.size() >= MAX_BLOCK_KINDS) {
-				break;
-			}
-			BlockSighting s = entry.getValue();
-			lines.add("- " + entry.getKey() + " x" + s.count() + ", nearest " + blocks(s.nearest()) + " "
-					+ direction(self.position(), Vec3.atCenterOf(s.nearestPos())) + " at " + coords(s.nearestPos()));
-		}
-		out.append("Notable blocks within ").append(BLOCK_RADIUS).append(":")
-				.append(lines.isEmpty() ? " none\n" : "\n" + String.join("\n", lines) + "\n");
+		List<BlockSighting> sorted = new ArrayList<>(seen.values());
+		sorted.sort(Comparator.comparingDouble(BlockSighting::nearest));
+		return sorted;
 	}
 
 	private static String notableName(BlockState state, FluidState fluid) {
@@ -199,7 +209,7 @@ public final class Perception {
 				|| name.contains("chest") || name.equals("barrel") || name.endsWith("shulker_box")
 				|| name.equals("crafting_table") || name.endsWith("furnace") || name.equals("smoker")
 				|| name.equals("spawner") || name.equals("enchanting_table") || name.equals("anvil")
-				|| name.endsWith("portal") || name.equals("obsidian")) {
+				|| name.endsWith("portal") || name.equals("obsidian") || name.equals("bell")) {
 			return name;
 		}
 		return null;
@@ -240,7 +250,7 @@ public final class Perception {
 		return entity.hasCustomName() ? type + " named " + entity.getCustomName().getString() : type;
 	}
 
-	private static String biome(ServerLevel level, BlockPos pos) {
+	public static String biome(ServerLevel level, BlockPos pos) {
 		return level.getBiome(pos).unwrapKey().map(key -> key.identifier().getPath()).orElse("unknown biome");
 	}
 

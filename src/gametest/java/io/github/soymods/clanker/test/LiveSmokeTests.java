@@ -24,6 +24,10 @@ import java.util.stream.Collectors;
  */
 @SuppressWarnings("removal")
 public class LiveSmokeTests {
+	static {
+		TestSetup.isolate();
+	}
+
 	private static final boolean LIVE = "1".equals(System.getenv("CLANKER_LIVE_TEST"));
 	private static final long TIMEOUT_MS = 120_000;
 
@@ -58,6 +62,7 @@ public class LiveSmokeTests {
 		ClankerBot bot;
 		try {
 			bot = ClankerBots.spawn(helper.getLevel().getServer(), helper.getLevel(), helper.absoluteVec(new Vec3(2.5, 1, 2.5)), 0, 0, "Clanker");
+			bot.voice().setLocalOnly(true);
 		} catch (ClankerBots.SpawnException e) {
 			throw new AssertionError(e.getMessage());
 		}
@@ -110,6 +115,7 @@ public class LiveSmokeTests {
 		ClankerBot bot;
 		try {
 			bot = ClankerBots.spawn(helper.getLevel().getServer(), helper.getLevel(), helper.absoluteVec(new Vec3(3.5, 1, 3.5)), 0, 0, "Clanky");
+			bot.voice().setLocalOnly(true);
 		} catch (ClankerBots.SpawnException e) {
 			throw new AssertionError(e.getMessage());
 		}

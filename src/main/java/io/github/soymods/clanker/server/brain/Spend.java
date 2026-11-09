@@ -34,7 +34,22 @@ public final class Spend {
 			Map.entry("gpt-4o", new Price(2.5, 1.25, 10)),
 			Map.entry("gpt-4o-mini", new Price(0.15, 0.075, 0.6)),
 			Map.entry("o4-mini", new Price(1.1, 0.275, 4.4)),
-			Map.entry("o3", new Price(2, 0.5, 8)));
+			Map.entry("o3", new Price(2, 0.5, 8)),
+			// xAI (from GET /v1/language-models, Nov 2026)
+			Map.entry("grok-4.20-0309-non-reasoning", new Price(1.25, 0.2, 2.5)),
+			Map.entry("grok-4.20-non-reasoning", new Price(1.25, 0.2, 2.5)),
+			Map.entry("grok-4.20-0309-reasoning", new Price(1.25, 0.2, 2.5)),
+			Map.entry("grok-4.20-reasoning", new Price(1.25, 0.2, 2.5)),
+			Map.entry("grok-4.20", new Price(1.25, 0.2, 2.5)),
+			Map.entry("grok-4.3", new Price(1.25, 0.2, 2.5)),
+			Map.entry("grok-4.5", new Price(2, 0.3, 6)),
+			Map.entry("grok-4.6", new Price(2, 0.5, 6)),
+			Map.entry("grok-4.7", new Price(2, 0.5, 6)),
+			Map.entry("grok-code-fast-1", new Price(1, 0.2, 2)));
+	/** Voice prices in USD per character. */
+	private static final double XAI_VOICE_PER_CHAR = 15.0 / 1_000_000;
+	private static final double ELEVENLABS_PER_CHAR = 0.08 / 1000;
+	private static final double ELEVENLABS_FAST_PER_CHAR = 0.04 / 1000;
 	static final Price FALLBACK = new Price(2.5, 0.25, 15);
 	private static final Gson GSON = new Gson();
 
@@ -57,9 +72,18 @@ public final class Spend {
 		Price price = PRICES.get(key);
 		if (price == null) {
 			// dated snapshots like gpt-5-mini-2025-08-07 cost the same as their alias
-			price = PRICES.get(key.replaceAll("-\\d{4}-\\d{2}-\\d{2}$", ""));
+			price = PRICES.get(key.replaceAll("-\\d{4}-\\d{2}-\\d{2}$", "").replaceAll("-latest$", ""));
 		}
 		return price == null ? FALLBACK : price;
+	}
+
+	/** Estimated cost of voicing this many characters with a host voice. */
+	public static double voiceCost(ServerConfig.VoiceProvider provider, String model, int characters) {
+		return characters * switch (provider) {
+			case LOCAL -> 0;
+			case XAI -> XAI_VOICE_PER_CHAR;
+			case ELEVENLABS -> model != null && (model.contains("flash") || model.contains("turbo")) ? ELEVENLABS_FAST_PER_CHAR : ELEVENLABS_PER_CHAR;
+		};
 	}
 
 	public static boolean isKnown(ServerConfig config, String model) {

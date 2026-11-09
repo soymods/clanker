@@ -29,11 +29,12 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * OpenAI Chat Completions, which also covers OpenAI-compatible servers (Ollama, OpenRouter, LM Studio…). Replies are
+ * OpenAI Chat Completions, which also covers xAI and other OpenAI-compatible servers (Ollama, OpenRouter, LM Studio…). Replies are
  * streamed so the text can be spoken while the rest is still being written.
  */
 public class OpenAiProvider implements LlmProvider {
 	public static final String OPENAI_BASE_URL = "https://api.openai.com/v1";
+	public static final String XAI_BASE_URL = "https://api.x.ai/v1";
 
 	private static final Gson GSON = new Gson();
 	private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();

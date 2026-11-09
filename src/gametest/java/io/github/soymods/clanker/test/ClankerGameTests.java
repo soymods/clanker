@@ -45,6 +45,10 @@ import java.util.concurrent.atomic.AtomicReference;
 
 @SuppressWarnings("removal") // makeMockServerPlayerInLevel is the only way to get a ServerPlayer in the test level
 public class ClankerGameTests {
+	static {
+		TestSetup.isolate();
+	}
+
 	private static final String ARENA = "clanker-test:arena";
 	/** Same floor, but tall enough to build and stand on towers. */
 	private static final String TALL_ARENA = "clanker-test:tall_arena";
@@ -59,6 +63,7 @@ public class ClankerGameTests {
 			ClankerBot bot = ClankerBots.spawn(helper.getLevel().getServer(), helper.getLevel(), pos, 0, 0,
 					RUN_ID + "_" + COUNTER.incrementAndGet());
 			bot.brain().setProviderOverride(provider);
+			bot.voice().setLocalOnly(true);
 			return bot;
 		} catch (ClankerBots.SpawnException e) {
 			throw new AssertionError("spawn failed: " + e.getMessage());

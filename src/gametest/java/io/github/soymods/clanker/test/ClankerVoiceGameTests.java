@@ -29,6 +29,10 @@ import java.util.concurrent.TimeUnit;
  * downloads about 290 MB into the test game directory.
  */
 public class ClankerVoiceGameTests implements FabricClientGameTest {
+	static {
+		TestSetup.isolate();
+	}
+
 	private static final boolean ENABLED = "1".equals(System.getenv("CLANKER_VOICE_TEST"));
 	private static final String LINE = "Clanker, come over here and help me chop some wood.";
 
@@ -80,6 +84,7 @@ public class ClankerVoiceGameTests implements FabricClientGameTest {
 				Vec3 pos = host.position().add(host.getLookAngle().multiply(1, 0, 1).normalize().scale(4));
 				try {
 					ClankerBot bot = ClankerBots.spawn(server, host.level(), pos, host.getYRot() + 180, 0, "Clanker");
+					bot.voice().setLocalOnly(true);
 					bot.brain().setProviderOverride(provider);
 					return bot.player().getId();
 				} catch (ClankerBots.SpawnException e) {

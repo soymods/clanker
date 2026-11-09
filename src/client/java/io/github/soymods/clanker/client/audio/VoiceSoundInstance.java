@@ -1,7 +1,6 @@
 package io.github.soymods.clanker.client.audio;
 
 import io.github.soymods.clanker.Clanker;
-import io.github.soymods.clanker.client.tts.Synthesizer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.resources.sounds.AbstractTickableSoundInstance;
 import net.minecraft.client.resources.sounds.SoundInstance;
@@ -14,7 +13,6 @@ import net.minecraft.world.entity.Entity;
 
 import javax.sound.sampled.AudioFormat;
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -26,9 +24,9 @@ public class VoiceSoundInstance extends AbstractTickableSoundInstance {
 	public static final SoundEvent VOICE = SoundEvent.createVariableRangeEvent(Clanker.id("voice"));
 
 	private final int entityId;
-	private final Synthesizer.Audio audio;
+	private final StreamAudio audio;
 
-	public VoiceSoundInstance(int entityId, Synthesizer.Audio audio, float volume) {
+	public VoiceSoundInstance(int entityId, StreamAudio audio, float volume) {
 		super(VOICE, SoundSource.VOICE, SoundInstance.createUnseededRandom());
 		this.entityId = entityId;
 		this.audio = audio;
@@ -62,14 +60,13 @@ public class VoiceSoundInstance extends AbstractTickableSoundInstance {
 		return CompletableFuture.completedFuture(new PcmStream(audio));
 	}
 
-	/** Hands the synthesized samples to OpenAL in chunks, then signals the end with null. */
+	/** Hands samples to OpenAL as they become available, then signals the end with null. */
 	private static final class PcmStream implements AudioStream {
-		private final short[] samples;
+		private final StreamAudio audio;
 		private final AudioFormat format;
-		private int position;
 
-		PcmStream(Synthesizer.Audio audio) {
-			this.samples = audio.samples();
+		PcmStream(StreamAudio audio) {
+			this.audio = audio;
 			this.format = new AudioFormat(audio.sampleRate(), 16, 1, true, false);
 		}
 
@@ -80,16 +77,7 @@ public class VoiceSoundInstance extends AbstractTickableSoundInstance {
 
 		@Override
 		public ByteBuffer read(int size) {
-			if (position >= samples.length) {
-				return null;
-			}
-			int count = Math.min(samples.length - position, Math.max(1, size / 2));
-			ByteBuffer buffer = ByteBuffer.allocateDirect(count * 2).order(ByteOrder.LITTLE_ENDIAN);
-			for (int i = 0; i < count; i++) {
-				buffer.putShort(samples[position + i]);
-			}
-			position += count;
-			return buffer.flip();
+			return audio.read(size / 2);
 		}
 
 		@Override

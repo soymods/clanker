@@ -2,10 +2,14 @@ package io.github.soymods.clanker.server.bot;
 
 import io.github.soymods.clanker.network.SpeechPayload;
 import io.github.soymods.clanker.network.ThinkingPayload;
+import io.github.soymods.clanker.network.VoiceAudioPayload;
 import io.github.soymods.clanker.server.brain.Brain;
 import io.github.soymods.clanker.server.brain.Memory;
 import io.github.soymods.clanker.server.pathing.MovementController;
+import io.github.soymods.clanker.server.perception.Observer;
 import io.github.soymods.clanker.server.skills.TaskRunner;
+import io.github.soymods.clanker.server.voice.HostVoice;
+import io.github.soymods.clanker.server.voice.VoiceCues;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -30,6 +34,8 @@ public class ClankerBot {
 	private final TaskRunner tasks;
 	private final Brain brain;
 	private final Memory memory;
+	private final Observer observer;
+	private final HostVoice voice;
 	private ClankerPlayer player;
 	private int deadTicks;
 	private String lastSpoken = "";
@@ -44,6 +50,8 @@ public class ClankerBot {
 		this.tasks = new TaskRunner(this);
 		this.brain = new Brain(this);
 		this.memory = Memory.load(server, name);
+		this.observer = new Observer(this);
+		this.voice = new HostVoice(this);
 	}
 
 	public MinecraftServer server() {
@@ -78,6 +86,14 @@ public class ClankerBot {
 		return brain;
 	}
 
+	public Observer observer() {
+		return observer;
+	}
+
+	public HostVoice voice() {
+		return voice;
+	}
+
 	public String lastSpoken() {
 		return lastSpoken;
 	}
@@ -110,6 +126,7 @@ public class ClankerBot {
 			}
 		} else {
 			deadTicks = 0;
+			observer.tick(player);
 		}
 		brain.tick();
 		if (brain.isThinking() != thinkingShown) {
@@ -119,23 +136,38 @@ public class ClankerBot {
 	}
 
 	/**
-	 * Says something out loud: shown in chat for everyone, and sent as speech to nearby clients that have Clanker.
+	 * Says something out loud: shown in chat for everyone (without voice cues), and voiced for nearby clients that have
+	 * Clanker, by the host's voice if it has one, else by each client's local voice.
 	 */
 	public void say(String text) {
-		String clean = text.replaceAll("\\s+", " ").strip();
-		if (clean.isEmpty() || player == null) {
+		String spoken = text.replaceAll("\\s+", " ").strip();
+		if (spoken.length() > 600) {
+			spoken = spoken.substring(0, 600) + "…";
+		}
+		String display = VoiceCues.forDisplay(spoken);
+		if (player == null || (display.isEmpty() && !VoiceCues.hasCues(spoken))) {
 			return;
 		}
-		if (clean.length() > 600) {
-			clean = clean.substring(0, 600) + "…";
+		int lineId = voice.submit(spoken);
+		if (display.isEmpty() && lineId == 0) {
+			return; // just a sound, and nothing to make it with
 		}
-		lastSpoken = clean;
+		lastSpoken = display.isEmpty() ? spoken : display;
 		spokenCount++;
 		// Speech first, so clients that will voice the line know to keep its chat copy off screen.
-		sendNearby(new SpeechPayload(player.getId(), clean), SpeechPayload.TYPE);
-		server.getPlayerList().broadcastSystemMessage(
-				Component.translatable("chat.type.text", player.getDisplayName(), Component.literal(clean)), false);
+		sendNearby(new SpeechPayload(player.getId(), display, lineId), SpeechPayload.TYPE);
+		if (!display.isEmpty()) {
+			server.getPlayerList().broadcastSystemMessage(
+					Component.translatable("chat.type.text", player.getDisplayName(), Component.literal(display)), false);
+		}
 		brain.onSpoke();
+	}
+
+	/** A piece of host-voiced audio for players near Clanker. */
+	public void sendVoiceAudio(VoiceAudioPayload payload) {
+		if (player != null) {
+			sendNearby(payload, VoiceAudioPayload.TYPE);
+		}
 	}
 
 	/** Sends a payload to players near Clanker who have the mod. */

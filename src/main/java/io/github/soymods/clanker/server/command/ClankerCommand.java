@@ -73,7 +73,7 @@ public final class ClankerCommand {
 			ClankerBot bot = ClankerBots.spawn(source.getServer(), source.getLevel(), source.getPosition(),
 					source.getRotation().y, source.getRotation().x);
 			source.sendSuccess(() -> Component.literal(bot.name() + " joined at " + Perception.coords(bot.player().position())), true);
-			if (ServerConfig.get().resolveApiKey().isBlank() && ServerConfig.get().provider == ServerConfig.Provider.OPENAI) {
+			if (ServerConfig.get().resolveApiKey().isBlank() && ServerConfig.get().provider != ServerConfig.Provider.OPENAI_COMPATIBLE) {
 				source.sendSystemMessage(Component.literal("No API key is set yet. Open /clanker config to add one."));
 			}
 			return 1;
@@ -107,7 +107,7 @@ public final class ClankerCommand {
 	private static int status(CommandContext<CommandSourceStack> context) {
 		CommandSourceStack source = context.getSource();
 		ServerConfig config = ServerConfig.get();
-		String model = config.model.isBlank() && config.provider == ServerConfig.Provider.OPENAI ? Brain.DEFAULT_OPENAI_MODEL : config.model;
+		String model = Brain.currentModel(config);
 		String key = config.resolveApiKey().isBlank() ? "not set" : "set (" + config.apiKeySource() + ")";
 		StringBuilder text = new StringBuilder("Provider: " + config.provider + ", model: " + model + ", API key: " + key);
 		text.append(String.format(java.util.Locale.ROOT, "\nSpent about $%.2f this session (cap %s), $%.2f today (cap %s)",
@@ -122,7 +122,8 @@ public final class ClankerCommand {
 					.append(", health ").append(Math.round(player.getHealth())).append("/20")
 					.append("\nTask: ").append(task == null ? "none" : task.describe(bot.get(), player))
 					.append(bot.get().brain().isThinking() ? " (thinking…)" : "")
-					.append("\n").append(bot.get().brain().status());
+					.append("\n").append(bot.get().brain().status())
+					.append("\nVoice: ").append(bot.get().voice().status());
 		}
 		source.sendSuccess(() -> Component.literal(text.toString()), false);
 		return 1;

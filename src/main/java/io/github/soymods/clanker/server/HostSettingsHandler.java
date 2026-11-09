@@ -31,7 +31,12 @@ public final class HostSettingsHandler {
 		settings.botName = config.botName;
 		settings.personality = config.personality;
 		settings.listenMode = config.listenMode.name();
-		settings.idleSeconds = config.idleSeconds;
+		settings.talkativeness = config.talkativeness.name();
+		settings.voiceProvider = config.voiceProvider.name();
+		settings.xaiVoice = config.xaiVoice;
+		settings.elevenLabsVoice = config.elevenLabsVoice;
+		settings.elevenLabsModel = config.elevenLabsModel;
+		settings.voiceSpeed = config.voiceSpeed;
 		settings.canBreakBlocks = config.canBreakBlocks;
 		settings.canPlaceBlocks = config.canPlaceBlocks;
 		settings.canAttackMobs = config.canAttackMobs;
@@ -41,12 +46,17 @@ public final class HostSettingsHandler {
 		settings.dailySpendCap = config.dailySpendCap;
 		settings.spentSession = Spend.session();
 		settings.spentToday = Spend.today();
-		String model = config.model.isBlank() && config.provider == ServerConfig.Provider.OPENAI ? Brain.DEFAULT_OPENAI_MODEL : config.model;
-		settings.priceKnown = Spend.isKnown(config, model);
+		settings.priceKnown = Spend.isKnown(config, Brain.currentModel(config));
 		settings.canEdit = ClankerPermissions.canManage(player);
 		settings.keySet = !config.resolveApiKey().isBlank();
 		settings.keySource = config.apiKeySource();
-		settings.defaultModel = Brain.DEFAULT_OPENAI_MODEL;
+		for (ServerConfig.KeyKind kind : ServerConfig.KeyKind.values()) {
+			settings.keySources.put(kind.name(), config.keySource(kind));
+		}
+		settings.defaultModel = Brain.currentModel(config);
+		settings.defaultModels.put(ServerConfig.Provider.OPENAI.name(), Brain.DEFAULT_OPENAI_MODEL);
+		settings.defaultModels.put(ServerConfig.Provider.XAI.name(), Brain.DEFAULT_XAI_MODEL);
+		settings.voiceStatus = ClankerBots.all().stream().findFirst().map(bot -> bot.voice().status()).orElse("");
 		settings.status = status;
 		return settings;
 	}
@@ -60,8 +70,10 @@ public final class HostSettingsHandler {
 		try {
 			config.provider = ServerConfig.Provider.valueOf(update.provider);
 			config.listenMode = ServerConfig.ListenMode.valueOf(update.listenMode);
+			config.talkativeness = ServerConfig.Talkativeness.valueOf(update.talkativeness);
+			config.voiceProvider = ServerConfig.VoiceProvider.valueOf(update.voiceProvider);
 		} catch (IllegalArgumentException | NullPointerException e) {
-			return "Unknown provider or listen mode.";
+			return "Unknown provider, listen mode, talkativeness or voice.";
 		}
 		String name = clean(update.botName);
 		if (!VALID_NAME.matcher(name).matches()) {
@@ -73,7 +85,10 @@ public final class HostSettingsHandler {
 		config.endpoint = clean(update.endpoint);
 		config.reasoningEffort = clean(update.reasoningEffort);
 		config.personality = clean(update.personality);
-		config.idleSeconds = Math.max(0, Math.min(3600, update.idleSeconds));
+		config.xaiVoice = clean(update.xaiVoice).isEmpty() ? "rex" : clean(update.xaiVoice);
+		config.elevenLabsVoice = clean(update.elevenLabsVoice);
+		config.elevenLabsModel = clean(update.elevenLabsModel);
+		config.voiceSpeed = Math.max(0.7, Math.min(1.5, update.voiceSpeed));
 		config.canBreakBlocks = update.canBreakBlocks;
 		config.canPlaceBlocks = update.canPlaceBlocks;
 		config.canAttackMobs = update.canAttackMobs;
@@ -82,9 +97,17 @@ public final class HostSettingsHandler {
 		config.sessionSpendCap = Math.max(0, Math.min(1000, update.sessionSpendCap));
 		config.dailySpendCap = Math.max(0, Math.min(1000, update.dailySpendCap));
 		if (update.clearApiKey) {
-			config.apiKey = "";
+			config.setKey(config.brainKey(), "");
 		} else if (update.newApiKey != null && !update.newApiKey.isBlank()) {
-			config.apiKey = update.newApiKey.strip();
+			config.setKey(config.brainKey(), update.newApiKey.strip());
+		}
+		ServerConfig.KeyKind voiceKey = ServerConfig.voiceKey(config.voiceProvider);
+		if (voiceKey != null) {
+			if (update.clearVoiceKey) {
+				config.setKey(voiceKey, "");
+			} else if (update.newVoiceKey != null && !update.newVoiceKey.isBlank()) {
+				config.setKey(voiceKey, update.newVoiceKey.strip());
+			}
 		}
 		config.save();
 		ClankerBots.all().forEach(bot -> bot.brain().resetBackoff());

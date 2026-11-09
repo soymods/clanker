@@ -4,31 +4,44 @@ import io.github.soymods.clanker.Clanker;
 import io.github.soymods.clanker.client.config.ClientConfig;
 import io.github.soymods.clanker.client.natives.VoiceFiles;
 import io.github.soymods.clanker.client.tts.Synthesizer;
+import io.github.soymods.clanker.network.VoiceAudioPayload;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.entity.Entity;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
- * Plays what Clanker says, one line at a time, and remembers recent lines so the microphone can ignore Clanker's own
- * voice coming back through the speakers.
+ * Plays what Clanker says, one line at a time and in the order it was said, and remembers recent lines so the
+ * microphone can ignore Clanker's own voice coming back through the speakers.
+ * <p>
+ * A line's audio comes either from the host (streamed in pieces, see {@link VoiceAudioPayload}) or from this client's
+ * own Piper voice. Either way the line takes its place in the queue as soon as it's said, and starts playing once
+ * enough of its audio is here.
  */
 public final class VoicePlayer {
 	private static final long ECHO_WINDOW_MS = 20_000;
+	/** Host audio buffered before a line starts, to ride out network hiccups. */
+	private static final double START_BUFFER_SECONDS = 0.3;
+	/** A line whose audio never shows up is skipped after this. */
+	private static final long GIVE_UP_MS = 20_000;
 
 	/** {@code receivedAt} is when the server's speech arrived, for the timing log. */
-	public record Line(int entityId, String speaker, String text, Synthesizer.Audio audio, long receivedAt) {
+	public record Line(int entityId, String speaker, String text, StreamAudio audio, long receivedAt, int lineId) {
 	}
 
 	private record Spoken(String text, long at) {
 	}
 
 	private static final Deque<Line> queue = new ArrayDeque<>();
+	/** Host-voiced lines waiting for their audio, by line id. */
+	private static final Map<Integer, Line> hostLines = new HashMap<>();
 	private static final Deque<String> unshown = new ArrayDeque<>();
 	private static final List<Spoken> recent = new ArrayList<>();
 	private static final Set<String> speakerNames = new LinkedHashSet<>(List.of("Clanker"));
@@ -44,32 +57,74 @@ public final class VoicePlayer {
 	private VoicePlayer() {
 	}
 
-	/** Called on the client thread when the server says Clanker spoke. */
+	/** A line for this client's own voice, as from a host without a voice of its own. */
 	public static void onSpeech(int entityId, String text) {
+		onSpeech(entityId, text, 0);
+	}
+
+	/** Called on the client thread when the server says Clanker spoke. {@code lineId} > 0 means the host voices it. */
+	public static void onSpeech(int entityId, String text, int lineId) {
 		Minecraft client = Minecraft.getInstance();
 		Entity entity = client.level == null ? null : client.level.getEntity(entityId);
 		String speaker = entity == null ? "Clanker" : entity.getName().getString();
 		speakerNames.add(speaker);
-		recent.add(new Spoken(text, System.currentTimeMillis()));
+		if (!text.isEmpty()) {
+			recent.add(new Spoken(text, System.currentTimeMillis()));
+		}
 
 		ClientConfig config = ClientConfig.get();
-		if (config.ttsEnabled && !VoiceFiles.ttsReady(config) && !setupHintShown) {
-			setupHintShown = true;
-			VoiceInput.hint(client, VoiceInput.SETUP_HINT);
-		}
-		if (!config.ttsEnabled || !VoiceFiles.ttsReady(config)) {
+		boolean hostVoiced = lineId > 0;
+		if (!config.ttsEnabled || (!hostVoiced && !VoiceFiles.ttsReady(config))) {
+			if (config.ttsEnabled && !setupHintShown) {
+				setupHintShown = true;
+				VoiceInput.hint(client, VoiceInput.SETUP_HINT);
+			}
 			return;
 		}
-		if (!config.speechText) {
+		if (!config.speechText && !text.isEmpty()) {
 			unshown.add(text);
 			while (unshown.size() > 16) {
 				unshown.poll();
 			}
 		}
+		StreamAudio audio = new StreamAudio(hostVoiced ? VoiceAudioPayload.SAMPLE_RATE : 22_050);
+		Line line = new Line(entityId, speaker, text, audio, System.currentTimeMillis(), lineId);
+		queue.add(line);
+		if (hostVoiced) {
+			hostLines.put(lineId, line);
+		} else {
+			synthesizeLocally(client, line);
+		}
+	}
+
+	/** A piece of host-voiced audio. */
+	public static void onAudio(int lineId, byte[] pcm, boolean end, boolean failed) {
+		Line line = hostLines.get(lineId);
+		if (line == null) {
+			return; // cut off, or we never got the line itself
+		}
+		if (failed) {
+			hostLines.remove(lineId);
+			line.audio().fail();
+			if (!line.text().isEmpty() && VoiceFiles.ttsReady(ClientConfig.get())) {
+				synthesizeLocally(Minecraft.getInstance(), line);
+			} else {
+				line.audio().finish();
+			}
+			return;
+		}
+		line.audio().append(pcm);
+		if (end) {
+			hostLines.remove(lineId);
+			line.audio().finish();
+		}
+	}
+
+	private static void synthesizeLocally(Minecraft client, Line line) {
+		ClientConfig config = ClientConfig.get();
 		synthesizing++;
 		int lineEpoch = epoch;
-		long receivedAt = System.currentTimeMillis();
-		Synthesizer.speak(VoiceFiles.voiceId(config), config.ttsSpeed, text).whenComplete((audio, error) -> client.execute(() -> {
+		Synthesizer.speak(VoiceFiles.voiceId(config), config.ttsSpeed, line.text()).whenComplete((audio, error) -> client.execute(() -> {
 			synthesizing--;
 			if (lineEpoch != epoch) {
 				return; // cut off before it was ready
@@ -77,12 +132,32 @@ public final class VoicePlayer {
 			if (error != null) {
 				lastError = error.getCause() != null ? error.getCause().getMessage() : error.getMessage();
 				Clanker.LOGGER.warn("Couldn't speak a line", error);
+				line.audio().finish();
 				return;
 			}
 			lastError = "";
-			Clanker.LOGGER.info("Synthesized a {}-character line in {}s", text.length(), seconds(System.currentTimeMillis() - receivedAt));
-			queue.add(new Line(entityId, speaker, text, audio, receivedAt));
+			Clanker.LOGGER.info("Synthesized a {}-character line in {}s", line.text().length(), seconds(System.currentTimeMillis() - line.receivedAt()));
+			if (audio.sampleRate() == line.audio().sampleRate()) {
+				line.audio().append(audio.samples());
+				line.audio().finish();
+			} else {
+				// Rare: a voice with a different rate. Swap in a line with the right format, same place in the queue.
+				StreamAudio replacement = new StreamAudio(audio.sampleRate());
+				replacement.append(audio.samples());
+				replacement.finish();
+				replace(line, new Line(line.entityId(), line.speaker(), line.text(), replacement, line.receivedAt(), line.lineId()));
+			}
 		}));
+	}
+
+	private static void replace(Line old, Line replacement) {
+		List<Line> lines = new ArrayList<>(queue);
+		int index = lines.indexOf(old);
+		if (index >= 0) {
+			lines.set(index, replacement);
+			queue.clear();
+			queue.addAll(lines);
+		}
 	}
 
 	public static void tick(Minecraft client) {
@@ -92,12 +167,19 @@ public final class VoicePlayer {
 			quietSince = System.currentTimeMillis();
 		}
 		// Wait while the player is talking, instead of talking over them.
-		if (playing == null && !queue.isEmpty() && !VoiceInput.listening()) {
-			current = queue.poll();
-			playing = new VoiceSoundInstance(current.entityId(), current.audio(), ClientConfig.get().ttsVolume);
-			startedAt = System.currentTimeMillis();
-			client.getSoundManager().play(playing);
-			Clanker.LOGGER.info("Started saying a line {}s after it arrived", seconds(startedAt - current.receivedAt()));
+		Line next = queue.peek();
+		if (playing == null && next != null && !VoiceInput.listening()) {
+			StreamAudio audio = next.audio();
+			if (audio.drained() || System.currentTimeMillis() - next.receivedAt() > GIVE_UP_MS && audio.bufferedSeconds() == 0) {
+				queue.poll(); // nothing to play
+				hostLines.remove(next.lineId());
+			} else if (audio.finished() || (next.lineId() > 0 && !audio.failed() && audio.aheadSeconds() >= START_BUFFER_SECONDS)) {
+				current = queue.poll();
+				playing = new VoiceSoundInstance(current.entityId(), audio, ClientConfig.get().ttsVolume);
+				startedAt = System.currentTimeMillis();
+				client.getSoundManager().play(playing);
+				Clanker.LOGGER.info("Started saying a line {}s after it arrived", seconds(startedAt - current.receivedAt()));
+			}
 		}
 		long now = System.currentTimeMillis();
 		recent.removeIf(spoken -> now - spoken.at() > ECHO_WINDOW_MS);
@@ -114,6 +196,7 @@ public final class VoicePlayer {
 
 	public static void clear(Minecraft client) {
 		queue.clear();
+		hostLines.clear();
 		if (playing != null) {
 			client.getSoundManager().stop(playing);
 		}
@@ -123,7 +206,7 @@ public final class VoicePlayer {
 
 	/**
 	 * Stops Clanker's voice because the player started talking: the current line, queued ones and any still being
-	 * synthesized. True if anything was cut off.
+	 * synthesized or streamed. True if anything was cut off.
 	 */
 	public static boolean interrupt(Minecraft client) {
 		boolean cut = playing != null || !queue.isEmpty() || synthesizing > 0;

@@ -36,7 +36,7 @@ public class ClankerVoiceScreen extends Screen {
 	private int statusY;
 
 	public ClankerVoiceScreen(Screen parent) {
-		super(Component.literal("Clanker Voice"));
+		super(Component.literal("Your Mic and Speakers"));
 		this.parent = parent;
 	}
 
@@ -87,7 +87,7 @@ public class ClankerVoiceScreen extends Screen {
 				: java.util.stream.Stream.concat(java.util.stream.Stream.of(voice), VoiceFiles.VOICES.stream()).toList();
 		addRenderableWidget(CycleButton.<String>builder(id -> Component.literal(voiceLabel(id)), voice)
 				.withValues(voices)
-				.create(right, top + ROW, WIDTH, 20, Component.literal("Voice"), (b, v) -> change(() -> config.ttsVoice = v)));
+				.create(right, top + ROW, WIDTH, 20, Component.literal("Local voice"), (b, v) -> change(() -> config.ttsVoice = v)));
 		addRenderableWidget(slider(right, top + ROW * 2, config.ttsVolume, v -> "Volume: " + Math.round(v * 100) + "%",
 				v -> config.ttsVolume = (float) v));
 		addRenderableWidget(slider(right, top + ROW * 3, (config.ttsSpeed - 0.5) / 1.5,

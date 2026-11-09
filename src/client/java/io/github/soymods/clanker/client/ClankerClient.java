@@ -11,6 +11,7 @@ import io.github.soymods.clanker.network.HostSettings;
 import io.github.soymods.clanker.network.SettingsPayload;
 import io.github.soymods.clanker.network.SignalPayload;
 import io.github.soymods.clanker.network.SpeechPayload;
+import io.github.soymods.clanker.network.VoiceAudioPayload;
 import io.github.soymods.clanker.network.ThinkingPayload;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
@@ -31,7 +32,9 @@ public class ClankerClient implements ClientModInitializer {
 		ClankerHud.register();
 
 		ClientPlayNetworking.registerGlobalReceiver(SpeechPayload.TYPE, (payload, context) ->
-				VoicePlayer.onSpeech(payload.entityId(), payload.text()));
+				VoicePlayer.onSpeech(payload.entityId(), payload.text(), payload.lineId()));
+		ClientPlayNetworking.registerGlobalReceiver(VoiceAudioPayload.TYPE, (payload, context) ->
+				VoicePlayer.onAudio(payload.lineId(), payload.pcm(), payload.end(), payload.failed()));
 		ClientReceiveMessageEvents.ALLOW_GAME.register((message, overlay) -> overlay || !isVoicedLine(message));
 		ClientPlayNetworking.registerGlobalReceiver(ThinkingPayload.TYPE, (payload, context) ->
 				ClankerHud.setThinking(payload.entityId(), payload.thinking()));
